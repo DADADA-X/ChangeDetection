@@ -29,7 +29,7 @@ parser.add_argument('--input_fn', type=str, required=True, help='The path to a C
 parser.add_argument('--model_fn', type=str, required=True, help='Path to the model file to use.')
 parser.add_argument('--output_dir', type=str, required=True, help='The path to output the model predictions as a GeoTIFF. Will fail if this file already exists.')
 parser.add_argument('--overwrite', action="store_true", help='Flag for overwriting `--output_dir` if that directory already exists.')
-parser.add_argument('--gpu', type=int, default=0, help='The ID of the GPU to use')
+parser.add_argument('--gpu', type=str, default=None, help='The indices of GPUs to enable (default: all)')
 parser.add_argument('--batch_size', type=int, default=32, help='Batch size to use during inference.')
 parser.add_argument('--save_soft', action="store_true", help='Flag that enables saving the predicted per class probabilities in addition to the "hard" class predictions.')
 parser.add_argument('--model', default='unet',
@@ -68,11 +68,18 @@ def main():
         print("The output directory doesn't exist or is empty.")
         os.makedirs(args.output_dir, exist_ok=True)
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda:%d" % args.gpu)
-    else:
-        print("WARNING! Torch is reporting that CUDA isn't available, exiting...")
-        return
+    if args.gpu is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+    n_gpu = torch.cuda.device_count()
+    device = torch.device('cuda:0' if n_gpu > 0 else 'cpu')
+    device_ids = list(range(n_gpu))
+
+    # if torch.cuda.is_available():
+    #     device = torch.device("cuda:%d" % args.gpu)
+    # else:
+    #     print("WARNING! Torch is reporting that CUDA isn't available, exiting...")
+    #     return
 
 
     #-------------------
@@ -84,9 +91,19 @@ def main():
         model = models.get_fcn()
     else:
         raise ValueError("Invalid model")
-    model.load_state_dict(torch.load(args.model_fn))
-    model = model.to(device)
 
+    state_dict = torch.load(args.model_fn)
+    for k in list(state_dict.keys()):
+        if len(device_ids) == 1 and k.startswith('module.'):
+            state_dict[k[len("module."):]] = state_dict[k]
+            del state_dict[k]
+        elif len(device_ids) > 1 and (not k.startswith('module.')):
+            state_dict['module.' + k] = state_dict[k]
+            del state_dict[k]
+    model.load_state_dict(state_dict)
+    model = model.to(device)
+    if len(device_ids) > 1:
+        model = torch.nn.DataParallel(model, device_ids=device_ids)
 
     #-------------------
     # Run on each line in the input
