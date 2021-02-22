@@ -18,10 +18,10 @@ for input_fn in url_csv_fns:
     label_fns_local = []
 
     for image_fn in image_fns:
-        image_fns_local.append(image_fn.replace('https://dfc2021.blob.core.windows.net', '/data/xyj'))
+        image_fns_local.append(image_fn.replace('https://dfc2021.blob.core.windows.net', '/home/data/xyj'))
 
     for label_fn in label_fns:
-        label_fns_local.append(label_fn.replace('https://dfc2021.blob.core.windows.net', '/data/xyj'))
+        label_fns_local.append(label_fn.replace('https://dfc2021.blob.core.windows.net', '/home/data/xyj'))
 
     image_fns_local = np.array(image_fns_local, dtype=object)
     label_fns_local = np.array(label_fns_local, dtype=object)
