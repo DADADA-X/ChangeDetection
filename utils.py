@@ -172,7 +172,7 @@ def fit(model, device, train_loader, valid_loader, num_images, optimizer, criter
                 epoch + 1,
                 current,
                 num_images,
-                current / num_images,
+                current / num_images * 100,
                 train_iter_loss.avg))
             train_iter_loss.reset()
 
