@@ -2,10 +2,11 @@ import numpy as np
 
 import rasterio
 from rasterio.windows import Window
-from rasterio.errors import RasterioIOError
+from rasterio.errors import RasterioError, RasterioIOError
 
 import torch
 from torch.utils.data.dataset import Dataset
+
 
 class TileInferenceDataset(Dataset):
     

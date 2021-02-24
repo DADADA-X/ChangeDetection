@@ -5,11 +5,12 @@ import time
 import datetime
 import argparse
 import copy
-
+import random
+import math
+import logging
 import numpy as np
 import pandas as pd
-
-from dataloaders.StreamingDatasets import StreamingGeospatialDataset
+from pathlib import Path
 
 import torch
 torch.backends.cudnn.deterministic = False
@@ -20,17 +21,23 @@ import torch.optim as optim
 
 import models
 import utils
+from dataloaders.StreamingDatasets import StreamingGeospatialDataset, StreamingValidationDataset
+from dataloaders.data_agu import *
+from loss import ce_loss
 
 NUM_WORKERS = 4
 NUM_CHIPS_PER_TILE = 100
 CHIP_SIZE = 256
+INIT_LR = 0.001
+save_period = 10
 
 parser = argparse.ArgumentParser(description='DFC2021 baseline training script')
-parser.add_argument('-i', '--input_fn', type=str, required=True,  help='The path to a CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
-parser.add_argument('-o', '--output_dir', type=str, required=True,  help='The path to a directory to store model checkpoints.')
+parser.add_argument('--train_fn', type=str, required=True,  help='The path to a train CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
+parser.add_argument('--valid_fn', type=str, required=True,  help='The path to a valid CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
+parser.add_argument('--output_dir', type=str, required=True,  help='The path to a directory to store model checkpoints.')
 parser.add_argument('--overwrite', action="store_true",  help='Flag for overwriting `output_dir` if that directory already exists.')
 parser.add_argument('--save_most_recent', action="store_true",  help='Flag for saving the most recent version of the model during training.')
-parser.add_argument('-m', '--model', default='unet',
+parser.add_argument('--model', default='unet',
     choices=(
         'unet',
         'fcn'
@@ -40,54 +47,61 @@ parser.add_argument('-m', '--model', default='unet',
 
 ## Training arguments
 # parser.add_argument('--gpu', type=int, default=0, help='The ID of the GPU to use')
-parser.add_argument('-g', '--gpu', type=str, default=None, help='The indices of GPUs to enable (default: all)')
-parser.add_argument('-b', '--batch_size', type=int, default=32, help='Batch size to use for training (default: 32)')
-parser.add_argument('-e', '--num_epochs', type=int, default=50, help='Number of epochs to train for (default: 50)')
-parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed to pass to numpy and torch (default: 0)')
+parser.add_argument('--gpu', type=str, default=None, help='The indices of GPUs to enable (default: all)')
+parser.add_argument('--batch_size', type=int, default=32, help='Batch size to use for training (default: 32)')
+parser.add_argument('--num_epochs', type=int, default=50, help='Number of epochs to train for (default: 50)')
+parser.add_argument('--seed', type=int, default=0, help='Random seed to pass to numpy and torch (default: 0)')
 args = parser.parse_args()
 
-def image_transforms(img, group):
-    if group == 0:
-        img = (img - utils.NAIP_2013_MEANS) / utils.NAIP_2013_STDS
-    elif group == 1:
-        img = (img - utils.NAIP_2017_MEANS) / utils.NAIP_2017_STDS
-    else:
-        raise ValueError("group not recognized")
-    img = np.rollaxis(img, 2, 0).astype(np.float32)
-    img = torch.from_numpy(img)
-    return img
 
-def label_transforms(labels, group):
-    labels = utils.NLCD_CLASS_TO_IDX_MAP[labels]
-    labels = torch.from_numpy(labels)
-    return labels
-
-def nodata_check(img, labels):
-    return np.any(labels == 0) or np.any(np.sum(img == 0, axis=2) == 4)
+def weights_init(model, seed=7):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    random.seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    for m in model.modules():
+        if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+            n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            m.weight.data.normal_(0, math.sqrt(2.0 / n))
+            if m.bias is not None:
+                m.bias.data.zero_()
+        elif isinstance(m, nn.BatchNorm2d):
+            m.weight.data.fill_(1)
+            m.bias.data.zero_()
+        elif isinstance(m, nn.Linear):
+            m.weight.data.normal_(0, 0.01)
+            if m.bias is not None:
+                m.bias.data.zero_()
 
 
 def main():
-    print("Starting DFC2021 baseline training script at %s" % (str(datetime.datetime.now())))
-
-
+    # print("Starting DFC2021 baseline training script at %s" % (str(datetime.datetime.now())))
     #-------------------
     # Setup
     #-------------------
-    assert os.path.exists(args.input_fn)
+    assert os.path.exists(args.train_fn)
+    assert os.path.exists(args.valid_fn)
 
-    if os.path.isfile(args.output_dir):
-        print("A file was passed as `--output_dir`, please pass a directory!")
-        return
-
-    if os.path.exists(args.output_dir) and len(os.listdir(args.output_dir)):
-        if args.overwrite:
-            print("WARNING! The output directory, %s, already exists, we might overwrite data in it!" % (args.output_dir))
-        else:
-            print("The output directory, %s, already exists and isn't empty. We don't want to overwrite and existing results, exiting..." % (args.output_dir))
-            return
-    else:
-        print("The output directory doesn't exist or is empty.")
-        os.makedirs(args.output_dir, exist_ok=True)
+    now_time = datetime.datetime.now()
+    time_str = datetime.datetime.strftime(now_time, '%m-%d_%H-%M-%S')
+    # output path
+    # output_dir = Path(args.output_dir).parent / time_str / Path(args.output_dir).stem
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+    logger = utils.init_logger(output_dir / 'log.info')
+    # if os.path.isfile(args.output_dir):
+    #     print("A file was passed as `--output_dir`, please pass a directory!")
+    #     return
+    #
+    # if os.path.exists(args.output_dir) and len(os.listdir(args.output_dir)):
+    #     if args.overwrite:
+    #         print("WARNING! The output directory, %s, already exists, we might overwrite data in it!" % (args.output_dir))
+    #     else:
+    #         print("The output directory, %s, already exists and isn't empty. We don't want to overwrite and existing results, exiting..." % (args.output_dir))
+    #         return
+    # else:
+    #     print("The output directory doesn't exist or is empty.")
+    #     os.makedirs(args.output_dir, exist_ok=True)
 
     if args.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -96,39 +110,46 @@ def main():
     device = torch.device('cuda:0' if n_gpu > 0 else 'cpu')
     device_ids = list(range(n_gpu))
 
-    # if torch.cuda.is_available():
-    #     device = torch.device("cuda:%d" % args.gpu)
-    # else:
-    #     print("WARNING! Torch is reporting that CUDA isn't available, exiting...")
-    #     return
-
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-
 
     #-------------------
     # Load input data
     #-------------------
-    input_dataframe = pd.read_csv(args.input_fn)
-    image_fns = input_dataframe["image_fn"].values
-    label_fns = input_dataframe["label_fn"].values
-    groups = input_dataframe["group"].values
 
-    dataset = StreamingGeospatialDataset(
-        imagery_fns=image_fns, label_fns=label_fns, groups=groups, chip_size=CHIP_SIZE, num_chips_per_tile=NUM_CHIPS_PER_TILE, windowed_sampling=False, verbose=False,
-        image_transform=image_transforms, label_transform=label_transforms, nodata_check=nodata_check
+    train_dataframe = pd.read_csv(args.train_fn)
+    train_image_fns = train_dataframe["image_fn"].values
+    train_label_fns = train_dataframe["label_fn"].values
+    train_groups = train_dataframe["group"].values
+    train_dataset = StreamingGeospatialDataset(
+        imagery_fns=train_image_fns, label_fns=train_label_fns, groups=train_groups, chip_size=CHIP_SIZE,
+        num_chips_per_tile=NUM_CHIPS_PER_TILE, transform=transform, nodata_check=nodata_check
     )
 
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
+    valid_dataframe = pd.read_csv(args.valid_fn)
+    valid_image_fns = valid_dataframe["image_fn"].values
+    valid_label_fns = valid_dataframe["label_fn"].values
+    valid_groups = valid_dataframe["group"].values
+    valid_dataset = StreamingValidationDataset(
+        imagery_fns=valid_image_fns, label_fns=valid_label_fns, groups=valid_groups, chip_size=CHIP_SIZE,
+        stride=CHIP_SIZE, transform=transform, nodata_check=nodata_check
+    )
+
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        num_workers=NUM_WORKERS,
+        pin_memory=True,
+    )
+    valid_dataloader = torch.utils.data.DataLoader(
+        valid_dataset,
         batch_size=args.batch_size,
         num_workers=NUM_WORKERS,
         pin_memory=True,
     )
 
-    num_training_batches_per_epoch = int(len(image_fns) * NUM_CHIPS_PER_TILE / args.batch_size)
-    print("We will be training with %d batches per epoch" % (num_training_batches_per_epoch))
-
+    num_training_images_per_epoch = int(len(train_image_fns) * NUM_CHIPS_PER_TILE)
+    # print("We will be training with %d batches per epoch" % (num_training_batches_per_epoch))
 
     #-------------------
     # Setup training
@@ -140,50 +161,63 @@ def main():
     else:
         raise ValueError("Invalid model")
 
+    weights_init(model, seed=args.seed)
+
     model = model.to(device)
     if len(device_ids) > 1:
         model = torch.nn.DataParallel(model, device_ids=device_ids)
-    optimizer = optim.AdamW(model.parameters(), lr=0.001, amsgrad=True)
-    criterion = nn.CrossEntropyLoss()
+
+    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+    optimizer = optim.AdamW(trainable_params, lr=INIT_LR, amsgrad=True, weight_decay=5e-4)
+    criterion = nn.CrossEntropyLoss() # todo
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
-
-    print("Model has %d parameters" % (utils.count_parameters(model)))
-
+    # factor=0.5, patience=3, min_lr=0.0000001
+    logger.info("Trainable parameters: {}".format(utils.count_parameters(model)))
 
     #-------------------
     # Model training
     #-------------------
-    training_task_losses = []
-    num_times_lr_dropped = 0 
-    model_checkpoints = []
-    temp_model_fn = os.path.join(args.output_dir, "most_recent_model.pt")
+    train_loss_total_epochs, valid_loss_total_epochs, epoch_lr = [], [], []
+    best_loss = 1e50
+    num_times_lr_dropped = 0
+    # model_checkpoints = []
+    # temp_model_fn = os.path.join(output_dir, "most_recent_model.pt")
 
     for epoch in range(args.num_epochs):
         lr = utils.get_lr(optimizer)
 
-        training_losses = utils.fit(
+        train_loss_epoch, valid_loss_epoch = utils.fit(
             model,
             device,
-            dataloader,
-            num_training_batches_per_epoch,
+            train_dataloader,
+            valid_dataloader,
+            num_training_images_per_epoch,
             optimizer,
             criterion,
             epoch,
-        )
-        scheduler.step(training_losses[0])
+            logger)
 
-        model_checkpoints.append(copy.deepcopy(model.state_dict()))
-        if args.save_most_recent:
+        scheduler.step(valid_loss_epoch)
+
+        if epoch % save_period and epoch != 0:
+            temp_model_fn = output_dir / 'checkpoint-epoch{}.pth'.format(epoch+1)
             torch.save(model.state_dict(), temp_model_fn)
+
+        if valid_loss_epoch < best_loss:
+            temp_model_fn = output_dir / 'model_best.pth'
+            torch.save(model.state_dict(), temp_model_fn)
+            best_loss = valid_loss_epoch
 
         if utils.get_lr(optimizer) < lr:
             num_times_lr_dropped += 1
             print("")
             print("Learning rate dropped")
             print("")
-            
-        training_task_losses.append(training_losses[0])
-            
+
+        train_loss_total_epochs.append(train_loss_epoch)
+        valid_loss_total_epochs.append(valid_loss_epoch)
+        epoch_lr.append(lr)
+
         if num_times_lr_dropped == 4:
             break
 
@@ -191,15 +225,15 @@ def main():
     #-------------------
     # Save everything
     #-------------------
-    save_obj = {
-        'args': args,
-        'training_task_losses': training_task_losses,
-        "checkpoints": model_checkpoints
-    }
-
-    save_obj_fn = "results.pt"
-    with open(os.path.join(args.output_dir, save_obj_fn), 'wb') as f:
-        torch.save(save_obj, f)
+    # save_obj = {
+    #     'args': args,
+    #     'training_task_losses': training_task_losses,
+    #     "checkpoints": model_checkpoints
+    # }
+    #
+    # save_obj_fn = "results.pt"
+    # with open(os.path.join(output_dir, save_obj_fn), 'wb') as f:
+    #     torch.save(save_obj, f)
 
 if __name__ == "__main__":
     main()

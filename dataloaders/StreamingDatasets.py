@@ -10,9 +10,10 @@ import torch
 from torchvision import transforms
 from torch.utils.data.dataset import IterableDataset
 
+
 class StreamingGeospatialDataset(IterableDataset):
     
-    def __init__(self, imagery_fns, label_fns=None, groups=None, chip_size=256, num_chips_per_tile=200, windowed_sampling=False, image_transform=None, label_transform=None, nodata_check=None, verbose=False):
+    def __init__(self, imagery_fns, label_fns=None, groups=None, chip_size=256, num_chips_per_tile=200, windowed_sampling=False, transform=None, nodata_check=None, verbose=False):
         """A torch Dataset for randomly sampling chips from a list of tiles. When used in conjunction with a DataLoader that has `num_workers>1` this Dataset will assign each worker to sample chips from disjoint sets of tiles.
 
         Args:
@@ -41,8 +42,7 @@ class StreamingGeospatialDataset(IterableDataset):
         self.num_chips_per_tile = num_chips_per_tile
         self.windowed_sampling = windowed_sampling
 
-        self.image_transform = image_transform
-        self.label_transform = label_transform
+        self.transform = transform
         self.nodata_check = nodata_check
 
         self.verbose = verbose
@@ -105,7 +105,6 @@ class StreamingGeospatialDataset(IterableDataset):
                 t_height, t_width = label_fp.shape
                 assert height == t_height and width == t_width
 
-
             # If we aren't in windowed sampling mode then we should read the entire tile up front
             img_data = None
             label_data = None
@@ -151,25 +150,12 @@ class StreamingGeospatialDataset(IterableDataset):
                         num_skipped_chips += 1
                         continue
 
-                # Transform the imagery
-                if self.image_transform is not None:
-                    if self.groups is None:
-                        img = self.image_transform(img)
-                    else:
-                        img = self.image_transform(img, group)
+                # Transform the imagery and the labels
+                if self.transform is not None:
+                    img, labels = self.transform(img, labels, group, data_aug_prob=0.5)
                 else:
                     img = torch.from_numpy(img).squeeze()
-
-                # Transform the labels
-                if self.use_labels:
-                    if self.label_transform is not None:
-                        if self.groups is None:
-                            labels = self.label_transform(labels)
-                        else:
-                            labels = self.label_transform(labels, group)
-                    else:
-                        labels = torch.from_numpy(labels).squeeze()
-
+                    labels = torch.from_numpy(labels).squeeze()
 
                 # Note, that img should be a torch "Double" type (i.e. a np.float32) and labels should be a torch "Long" type (i.e. np.int64)
                 if self.use_labels:
@@ -188,4 +174,151 @@ class StreamingGeospatialDataset(IterableDataset):
     def __iter__(self):
         if self.verbose:
             print("Creating a new StreamingGeospatialDataset iterator")
+        return iter(self.stream_chips())
+
+
+class StreamingValidationDataset(IterableDataset):
+
+    def __init__(self, imagery_fns, label_fns=None, groups=None, chip_size=256, stride=256, transform=None, nodata_check=None, windowed_sampling=False, verbose=False):
+        if label_fns is None:
+            self.fns = imagery_fns
+            self.use_labels = False
+        else:
+            self.fns = list(zip(imagery_fns, label_fns))
+            self.use_labels = True
+
+        self.groups = groups
+
+        self.chip_size = chip_size
+        self.stride = stride
+
+        self.transform = transform
+        self.nodata_check = nodata_check
+        self.windowed_sampling = windowed_sampling
+        self.verbose = verbose
+
+        if self.verbose:
+            print("Constructed TileValidationDataset")
+
+    def stream_tile_fns(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:  # In this case we are not loading through a DataLoader with multiple workers
+            worker_id = 0
+            num_workers = 1
+        else:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+
+        if worker_id == 0:
+            np.random.shuffle(self.fns) # in place
+
+        if self.verbose:
+            print("Creating a filename stream for worker %d" % (worker_id))
+
+        N = len(self.fns)
+        num_files_per_worker = int(np.ceil(N / num_workers))
+        lower_idx = worker_id * num_files_per_worker
+        upper_idx = min(N, (worker_id+1) * num_files_per_worker)
+
+        for idx in range(lower_idx, upper_idx):
+
+            label_fn = None
+            if self.use_labels:
+                img_fn, label_fn = self.fns[idx]
+            else:
+                img_fn = self.fns[idx]
+
+            if self.groups is not None:
+                group = self.groups[idx]
+            else:
+                group = None
+
+            if self.verbose:
+                print("Worker %d, yielding file %d" % (worker_id, idx))
+
+            yield (img_fn, label_fn, group)
+
+    def stream_chips(self):
+        for img_fn, label_fn, group in self.stream_tile_fns():
+            num_skipped_chips = 0
+
+            img_fp = rasterio.open(img_fn, "r")
+            label_fp = rasterio.open(label_fn, "r") if self.use_labels else None
+
+            height, width = img_fp.shape
+            # num_channels = img_fp.count
+            # dtype = img_fp.profile["dtype"]
+            if self.use_labels: # garuntee that our label mask has the same dimensions as our imagery
+                t_height, t_width = label_fp.shape
+                assert height == t_height and width == t_width
+
+            img_data = None
+            label_data = None
+            try:
+                if not self.windowed_sampling:
+                    img_data = np.rollaxis(img_fp.read(), 0, 3)
+                    if self.use_labels:
+                        label_data = label_fp.read().squeeze() # assume the label geotiff has a single channel
+            except RasterioError as e:
+                print("WARNING: Error reading in entire file, skipping to the next file")
+                continue
+
+            chip_coordinates = []  # upper left coordinate (y,x), of each chip that this Dataset will return
+            for y in list(range(0, height - self.chip_size, self.stride)) + [height - self.chip_size]:
+                for x in list(range(0, width - self.chip_size, self.stride)) + [width - self.chip_size]:
+                    chip_coordinates.append((y, x))
+            # num_chips = len(chip_coordinates)
+
+            for y, x in chip_coordinates:
+                img = None
+                labels = None
+                if self.windowed_sampling:
+                    try:
+                        img = np.rollaxis(img_fp.read(window=Window(x, y, self.chip_size, self.chip_size)), 0, 3)
+                        print(img.shape)
+                        if self.use_labels:
+                            labels = label_fp.read(window=Window(x, y, self.chip_size, self.chip_size)).squeeze()
+                    except RasterioIOError as e:
+                        print("WARNING: Error reading chip from file, skipping to the next chip")
+                        continue
+                else:
+                    img = img_data[y:y + self.chip_size, x:x + self.chip_size, :]
+                    if self.use_labels:
+                        labels = label_data[y:y+self.chip_size, x:x+self.chip_size]
+
+                # Check for no data
+                if self.nodata_check is not None:
+                    if self.use_labels:
+                        skip_chip = self.nodata_check(img, labels)
+                    else:
+                        skip_chip = self.nodata_check(img)
+
+                    if skip_chip: # The current chip has been identified as invalid by the `nodata_check(...)` method
+                        num_skipped_chips += 1
+                        continue
+
+                # Transform the imagery and the labels
+                if self.transform is not None:
+                    img, labels = self.transform(img, labels, group, data_aug_prob=0)
+                else:
+                    img = torch.from_numpy(img).squeeze()
+                    labels = torch.from_numpy(labels).squeeze()
+
+                # Note, that img should be a torch "Double" type (i.e. a np.float32) and labels should be a torch "Long" type (i.e. np.int64)
+                if self.use_labels:
+                    yield img, labels
+                else:
+                    yield img
+
+            # Close file pointers
+            img_fp.close()
+            if self.use_labels:
+                label_fp.close()
+
+            if num_skipped_chips>0 and self.verbose:
+                print("We skipped %d chips on %s" % (num_skipped_chips, img_fn))
+
+    def __iter__(self):
+        if self.verbose:
+            print("Creating a new TileValidationDataset iterator")
         return iter(self.stream_chips())

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import segmentation_models_pytorch as smp
+# import segmentation_models_pytorch as smp
 
 import utils
 
@@ -33,10 +33,11 @@ class FCN(nn.Module):
 
 
 def get_unet():
-    return smp.Unet(
-        encoder_name='resnet18', encoder_depth=3, encoder_weights=None,
-        decoder_channels=(128, 64, 64), in_channels=4, classes=len(utils.NLCD_CLASSES)
-    )
+    return
+    # return smp.Unet(
+    #     encoder_name='resnet18', encoder_depth=3, encoder_weights=None,
+    #     decoder_channels=(128, 64, 64), in_channels=4, classes=len(utils.NLCD_CLASSES)
+    # )
 
 def get_fcn():
     return FCN(num_input_channels=4, num_output_classes=len(utils.NLCD_CLASSES), num_filters=64)
