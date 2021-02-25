@@ -18,7 +18,8 @@ def transform(img, labels, group, data_aug_prob=0):
     if data_aug_prob > 0:
         data_augment = Compose([
         # RandomHueSaturationValue(data_aug_prob),
-        RandomShiftScaleRotate(data_aug_prob),
+        # RandomShiftScaleRotate(data_aug_prob),
+        RandomScale(data_aug_prob),
         RandomHorizontalFlip(data_aug_prob),
         RandomVerticleFlip(data_aug_prob),
         RandomRotate90(data_aug_prob)
@@ -174,5 +175,41 @@ class RandomRotate90:
         return image, label
 
 
+class RandomScale:
+    def __init__(self, u=0.):
+        self.u = u
+
+    def __call__(self, image, label):
+        if np.random.random() < self.u:
+            scale_scope = 0.1  # todo
+            scale_h = np.random.uniform(1, 1 + scale_scope)
+            scale_w = np.random.uniform(1, 1 + scale_scope)
+            height, width = image.shape[:2]
+            new_height, new_width = int(height * scale_h), int(width * scale_w)
+            image = cv2.resize(image, (new_height, new_width), interpolation=cv2.INTER_LINEAR)
+            label = cv2.resize(label, (new_height, new_width), interpolation=cv2.INTER_NEAREST)
+            if height == new_height and width == new_width:
+                return image, label
+            elif height == new_height:
+                h = 0
+                w = np.random.randint(0, new_width - width)
+            elif width == new_width:
+                h = np.random.randint(0, new_height - height)
+                w = 0
+            else:
+                h = np.random.randint(0, new_height - height)
+                w = np.random.randint(0, new_width - width)
+            image = image[w:w+width, h:h+height, :]
+            label = label[w:w+width, h:h+height]
+        return image, label
+
+
 def clip(img, dtype, maxval):
     return np.clip(img, 0, maxval).astype(dtype)
+
+
+if __name__ == '__main__':
+    aug = RandomScale(0.5)
+    image = np.ones((256, 256, 3))
+    labels = np.ones((256, 256))
+    aug(image, labels)

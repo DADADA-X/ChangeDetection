@@ -16,12 +16,13 @@ from tqdm import tqdm
 
 NAIP_2013_MEANS = np.array([117.00, 130.75, 122.50, 159.30])
 NAIP_2013_STDS = np.array([38.16, 36.68, 24.30, 66.22])
-NAIP_2017_MEANS = np.array([72.84,  86.83, 76.78, 130.82])
+NAIP_2017_MEANS = np.array([72.84, 86.83, 76.78, 130.82])
 NAIP_2017_STDS = np.array([41.78, 34.66, 28.76, 58.95])
-NLCD_CLASSES = [ 0, 11, 12, 21, 22, 23, 24, 31, 41, 42, 43, 52, 71, 81, 82, 90, 95] # 16 classes + 1 nodata class ("0"). Note that "12" is "Perennial Ice/Snow" and is not present in Maryland.
+NLCD_CLASSES = [0, 11, 12, 21, 22, 23, 24, 31, 41, 42, 43, 52, 71, 81, 82, 90,
+                95]  # 16 classes + 1 nodata class ("0"). Note that "12" is "Perennial Ice/Snow" and is not present in Maryland.
 
-NLCD_CLASS_COLORMAP = { # Copied from the emebedded color table in the NLCD data files
-    0:  (0, 0, 0, 255),
+NLCD_CLASS_COLORMAP = {  # Copied from the emebedded color table in the NLCD data files
+    0: (0, 0, 0, 255),
     11: (70, 107, 159, 255),
     12: (209, 222, 248, 255),
     21: (222, 197, 197, 255),
@@ -45,10 +46,11 @@ NLCD_IDX_COLORMAP = {
     for idx, c in enumerate(NLCD_CLASSES)
 }
 
+
 def get_nlcd_class_to_idx_map():
     nlcd_label_to_idx_map = []
     idx = 0
-    for i in range(NLCD_CLASSES[-1]+1):
+    for i in range(NLCD_CLASSES[-1] + 1):
         if i in NLCD_CLASSES:
             nlcd_label_to_idx_map.append(idx)
             idx += 1
@@ -57,48 +59,52 @@ def get_nlcd_class_to_idx_map():
     nlcd_label_to_idx_map = np.array(nlcd_label_to_idx_map).astype(np.int64)
     return nlcd_label_to_idx_map
 
-NLCD_CLASS_TO_IDX_MAP = get_nlcd_class_to_idx_map() # I do this computation on import for illustration (this could instead be a length 96 vector that is hardcoded here)
 
+NLCD_CLASS_TO_IDX_MAP = get_nlcd_class_to_idx_map()  # I do this computation on import for illustration (this could instead be a length 96 vector that is hardcoded here)
 
 NLCD_IDX_TO_REDUCED_LC_MAP = np.array([
-    4,#  0 No data 0
-    0,#  1 Open Water
-    4,#  2 Ice/Snow
-    2,#  3 Developed Open Space
-    3,#  4 Developed Low Intensity
-    3,#  5 Developed Medium Intensity
-    3,#  6 Developed High Intensity
-    3,#  7 Barren Land
-    1,#  8 Deciduous Forest
-    1,#  9 Evergreen Forest
-    1,# 10 Mixed Forest
-    1,# 11 Shrub/Scrub
-    2,# 12 Grassland/Herbaceous
-    2,# 13 Pasture/Hay
-    2,# 14 Cultivated Crops
-    1,# 15 Woody Wetlands
-    1,# 16 Emergent Herbaceious Wetlands
+    4,  # 0 No data 0
+    0,  # 1 Open Water
+    4,  # 2 Ice/Snow
+    2,  # 3 Developed Open Space
+    3,  # 4 Developed Low Intensity
+    3,  # 5 Developed Medium Intensity
+    3,  # 6 Developed High Intensity
+    3,  # 7 Barren Land
+    1,  # 8 Deciduous Forest
+    1,  # 9 Evergreen Forest
+    1,  # 10 Mixed Forest
+    1,  # 11 Shrub/Scrub
+    2,  # 12 Grassland/Herbaceous
+    2,  # 13 Pasture/Hay
+    2,  # 14 Cultivated Crops
+    1,  # 15 Woody Wetlands
+    1,  # 16 Emergent Herbaceious Wetlands
 ])
 
 NLCD_IDX_TO_REDUCED_LC_ACCUMULATOR = np.array([
-    [0,0,0,0,1],#  0 No data 0
-    [1,0,0,0,0],#  1 Open Water
-    [0,0,0,0,1],#  2 Ice/Snow
-    [0,0,0,0,0],#  3 Developed Open Space
-    [0,0,0,0,0],#  4 Developed Low Intensity
-    [0,0,0,1,0],#  5 Developed Medium Intensity
-    [0,0,0,1,0],#  6 Developed High Intensity
-    [0,0,0,0,0],#  7 Barren Land
-    [0,1,0,0,0],#  8 Deciduous Forest
-    [0,1,0,0,0],#  9 Evergreen Forest
-    [0,1,0,0,0],# 10 Mixed Forest
-    [0,1,0,0,0],# 11 Shrub/Scrub
-    [0,0,1,0,0],# 12 Grassland/Herbaceous
-    [0,0,1,0,0],# 13 Pasture/Hay
-    [0,0,1,0,0],# 14 Cultivated Crops
-    [0,1,0,0,0],# 15 Woody Wetlands
-    [0,1,0,0,0],# 16 Emergent Herbaceious Wetlands
+    [0, 0, 0, 0, 1],  # 0 No data 0
+    [1, 0, 0, 0, 0],  # 1 Open Water
+    [0, 0, 0, 0, 1],  # 2 Ice/Snow
+    [0, 0, 0, 0, 0],  # 3 Developed Open Space
+    [0, 0, 0, 0, 0],  # 4 Developed Low Intensity
+    [0, 0, 0, 1, 0],  # 5 Developed Medium Intensity
+    [0, 0, 0, 1, 0],  # 6 Developed High Intensity
+    [0, 0, 0, 0, 0],  # 7 Barren Land
+    [0, 1, 0, 0, 0],  # 8 Deciduous Forest
+    [0, 1, 0, 0, 0],  # 9 Evergreen Forest
+    [0, 1, 0, 0, 0],  # 10 Mixed Forest
+    [0, 1, 0, 0, 0],  # 11 Shrub/Scrub
+    [0, 0, 1, 0, 0],  # 12 Grassland/Herbaceous
+    [0, 0, 1, 0, 0],  # 13 Pasture/Hay
+    [0, 0, 1, 0, 0],  # 14 Cultivated Crops
+    [0, 1, 0, 0, 0],  # 15 Woody Wetlands
+    [0, 1, 0, 0, 0],  # 16 Emergent Herbaceious Wetlands
 ])
+
+NLCD_IDX_TRAIN_PROB = torch.Tensor(
+    [0.00, 14.99, 0.00, 8.10, 4.47, 2.11, 0.81, 0.35, 20.75, 1.97, 8.28, 0.59, 0.45, 9.12, 17.22, 8.36, 2.42])
+NLCD_IDX_TRAIN_WEIGHT = (1 / torch.log(1.02 + NLCD_IDX_TRAIN_PROB))
 
 
 class Timer():
@@ -117,6 +123,7 @@ class Timer():
     Finished 'running stuff' in 12.45 seconds
     ```
     '''
+
     def __init__(self, message):
         self.message = message
 
@@ -145,8 +152,9 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def fit(model, device, train_loader, valid_loader, num_images, optimizer, criterion, epoch, logger, log_step=1, memo=''):
-    logger.info('------------ Training Epoch {} ------------'.format(epoch+1))
+def fit(model, device, train_loader, valid_loader, num_images, optimizer, criterion, epoch, logger, log_step=1,
+        memo=''):
+    logger.info('------------ Training Epoch {} ------------'.format(epoch + 1))
     model.train()
     train_epoch_loss = AverageMeter()
     train_iter_loss = AverageMeter()
@@ -156,7 +164,7 @@ def fit(model, device, train_loader, valid_loader, num_images, optimizer, criter
         # ------------- train -------------- #
         data = data.to(device)
         targets = targets.to(device)
-        
+
         optimizer.zero_grad()
         outputs = model(data)
         loss = criterion(outputs, targets)
@@ -181,7 +189,7 @@ def fit(model, device, train_loader, valid_loader, num_images, optimizer, criter
     valid_epoch_loss = AverageMeter()
     # valid_iter_loss = AverageMeter()
     with torch.no_grad():
-        with tqdm(total=195*valid_loader.batch_size, file=sys.stdout) as pbar:
+        with tqdm(total=195 * valid_loader.batch_size, file=sys.stdout) as pbar:
             for batch_idx, (data, targets) in enumerate(valid_loader):
                 pbar.update(valid_loader.batch_size)
                 data = data.to(device)
@@ -205,34 +213,34 @@ def fit(model, device, train_loader, valid_loader, num_images, optimizer, criter
 
     train_avg_loss = train_epoch_loss.avg
     valid_avg_loss = valid_epoch_loss.avg
-    
+
     logger.info('\nTraining Epoch: {}\n Train_Loss: {:.2f}\n Valid_Loss: {:.2f}\n'.format(
         epoch + 1, train_avg_loss, valid_avg_loss))
-    
+
     return train_avg_loss, valid_avg_loss
 
 
 def evaluate(model, device, data_loader, num_batches, criterion, epoch, memo=''):
     model.eval()
-    
+
     losses = []
     tic = time.time()
     for batch_idx, (data, targets) in tqdm(enumerate(data_loader), total=num_batches, file=sys.stdout):
         data = data.to(device)
         targets = targets.to(device)
-        
+
         with torch.no_grad():
             outputs = model(data)
             loss = criterion(outputs, targets)
             losses.append(loss.item())
-    
+
     avg_loss = np.mean(losses)
 
     print('[{}] Validation Epoch: {}\t Time elapsed: {:.2f} seconds\t Loss: {:.2f}'.format(
-        memo, epoch, time.time()-tic, avg_loss), end=""
+        memo, epoch, time.time() - tic, avg_loss), end=""
     )
     print("")
-    
+
     return [avg_loss]
 
 
@@ -248,7 +256,7 @@ def score(model, device, data_loader, num_batches):
         with torch.no_grad():
             output = F.softmax(model(data))
         batch_size = data.shape[0]
-        predictions[idx:idx+batch_size] = output.cpu().numpy()
+        predictions[idx:idx + batch_size] = output.cpu().numpy()
         idx += batch_size
     return predictions
 
@@ -264,7 +272,8 @@ def init_logger(save_fn):
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(simple)
 
-    info_file_handler = logging.handlers.RotatingFileHandler(save_fn, maxBytes=10485760, backupCount=20, encoding='utf-8')
+    info_file_handler = logging.handlers.RotatingFileHandler(save_fn, maxBytes=10485760, backupCount=20,
+                                                             encoding='utf-8')
     info_file_handler.setLevel(logging.INFO)
     info_file_handler.setFormatter(datetime)
 
