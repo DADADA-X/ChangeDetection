@@ -119,7 +119,7 @@ def main():
         image_fn = image_fns[image_idx]
         group = groups[image_idx]
 
-        print("(%d/%d) Processing %s" % (image_idx+1, len(image_fns), Path(image_fn).stem), end=" ... ")
+        print("(%d/%d) Processing %s" % (image_idx+1, len(image_fns), Path(image_fn).stem), end=" ... \n")
 
         #-------------------
         # Load input and create dataloader
