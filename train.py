@@ -88,7 +88,7 @@ def main():
     # output_dir = Path(args.output_dir).parent / time_str / Path(args.output_dir).stem
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
-    logger = utils.init_logger(output_dir / 'log.info')
+    logger = utils.init_logger(output_dir / 'info.log')
     # if os.path.isfile(args.output_dir):
     #     print("A file was passed as `--output_dir`, please pass a directory!")
     #     return

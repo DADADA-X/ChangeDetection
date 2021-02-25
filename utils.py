@@ -206,7 +206,7 @@ def fit(model, device, train_loader, valid_loader, num_images, optimizer, criter
     train_avg_loss = train_epoch_loss.avg
     valid_avg_loss = valid_epoch_loss.avg
     
-    logger.info('\nTraining Epoch: {}\n Train Loss: {:.2f}\n Valid Loss: {:.2f}\n'.format(
+    logger.info('\nTraining Epoch: {}\n Train_Loss: {:.2f}\n Valid_Loss: {:.2f}\n'.format(
         epoch + 1, train_avg_loss, valid_avg_loss))
     
     return train_avg_loss, valid_avg_loss

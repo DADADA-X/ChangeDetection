@@ -4,11 +4,10 @@ os.environ["CURL_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt" # A workarou
 import time
 import datetime
 import argparse
-
+import rasterio
 import numpy as np
 import pandas as pd
-
-import rasterio
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -28,7 +27,7 @@ parser = argparse.ArgumentParser(description='DFC2021 model inference script')
 parser.add_argument('--input_fn', type=str, required=True, help='The path to a CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
 parser.add_argument('--model_fn', type=str, required=True, help='Path to the model file to use.')
 parser.add_argument('--output_dir', type=str, required=True, help='The path to output the model predictions as a GeoTIFF. Will fail if this file already exists.')
-parser.add_argument('--overwrite', action="store_true", help='Flag for overwriting `--output_dir` if that directory already exists.')
+# parser.add_argument('--overwrite', action="store_true", help='Flag for overwriting `--output_dir` if that directory already exists.')
 parser.add_argument('--gpu', type=str, default=None, help='The indices of GPUs to enable (default: all)')
 parser.add_argument('--batch_size', type=int, default=32, help='Batch size to use during inference.')
 parser.add_argument('--save_soft', action="store_true", help='Flag that enables saving the predicted per class probabilities in addition to the "hard" class predictions.')
@@ -45,7 +44,7 @@ args = parser.parse_args()
 
 
 def main():
-    print("Starting DFC2021 model inference script at %s" % (str(datetime.datetime.now())))
+    # print("Starting DFC2021 model inference script at %s" % (str(datetime.datetime.now())))
 
 
     #-------------------
@@ -54,19 +53,22 @@ def main():
     assert os.path.exists(args.input_fn)
     assert os.path.exists(args.model_fn)
 
-    if os.path.isfile(args.output_dir):
-        print("A file was passed as `--output_dir`, please pass a directory!")
-        return
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
 
-    if os.path.exists(args.output_dir) and len(os.listdir(args.output_dir)) > 0:
-        if args.overwrite:
-            print("WARNING! The output directory, %s, already exists, we might overwrite data in it!" % (args.output_dir))
-        else:
-            print("The output directory, %s, already exists and isn't empty. We don't want to overwrite and existing results, exiting..." % (args.output_dir))
-            return
-    else:
-        print("The output directory doesn't exist or is empty.")
-        os.makedirs(args.output_dir, exist_ok=True)
+    # if os.path.isfile(args.output_dir):
+    #     print("A file was passed as `--output_dir`, please pass a directory!")
+    #     return
+    #
+    # if os.path.exists(args.output_dir) and len(os.listdir(args.output_dir)) > 0:
+    #     if args.overwrite:
+    #         print("WARNING! The output directory, %s, already exists, we might overwrite data in it!" % (args.output_dir))
+    #     else:
+    #         print("The output directory, %s, already exists and isn't empty. We don't want to overwrite and existing results, exiting..." % (args.output_dir))
+    #         return
+    # else:
+    #     print("The output directory doesn't exist or is empty.")
+    #     os.makedirs(args.output_dir, exist_ok=True)
 
     if args.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -113,11 +115,11 @@ def main():
     groups = input_dataframe["group"].values
 
     for image_idx in range(len(image_fns)):
-        tic = time.time()
+        # tic = time.time()
         image_fn = image_fns[image_idx]
         group = groups[image_idx]
 
-        print("(%d/%d) Processing %s" % (image_idx, len(image_fns), image_fn), end=" ... ")
+        print("(%d/%d) Processing %s" % (image_idx+1, len(image_fns), Path(image_fn).stem), end=" ... ")
 
         #-------------------
         # Load input and create dataloader
@@ -169,6 +171,8 @@ def main():
         output = output / counts
         output_hard = output.argmax(axis=0).astype(np.uint8)
 
+        # todo offline test
+
         #-------------------
         # Save output
         #-------------------
@@ -205,7 +209,7 @@ def main():
             with rasterio.open(output_fn, "w", **output_profile) as f:
                 f.write(output)
 
-        print("finished in %0.4f seconds" % (time.time() - tic))
+        # print("finished in %0.4f seconds" % (time.time() - tic))
 
 if __name__ == "__main__":
     main()
