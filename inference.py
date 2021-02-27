@@ -115,11 +115,11 @@ def main():
     groups = input_dataframe["group"].values
 
     for image_idx in range(len(image_fns)):
-        # tic = time.time()
+        tic = time.time()
         image_fn = image_fns[image_idx]
         group = groups[image_idx]
 
-        print("(%d/%d) Processing %s" % (image_idx+1, len(image_fns), Path(image_fn).stem), end=" ... \n")
+        print("(%d/%d) Processing %s" % (image_idx+1, len(image_fns), Path(image_fn).stem), end=" ... ")
 
         #-------------------
         # Load input and create dataloader
@@ -209,7 +209,7 @@ def main():
             with rasterio.open(output_fn, "w", **output_profile) as f:
                 f.write(output)
 
-        # print("finished in %0.4f seconds" % (time.time() - tic))
+        print("finished in %0.4f seconds" % (time.time() - tic))
 
 if __name__ == "__main__":
     main()

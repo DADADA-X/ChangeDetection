@@ -152,7 +152,7 @@ class StreamingGeospatialDataset(IterableDataset):
 
                 # Transform the imagery and the labels
                 if self.transform is not None:
-                    img, labels = self.transform(img, labels, group, data_aug_prob=0.5)
+                    img, labels = self.transform(img, labels, group, data_aug_prob=0)
                 else:
                     img = torch.from_numpy(img).squeeze()
                     labels = torch.from_numpy(labels).squeeze()

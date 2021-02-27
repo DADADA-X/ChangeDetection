@@ -200,7 +200,7 @@ def main():
 
         scheduler.step(valid_loss_epoch)
 
-        if epoch % save_period and epoch != 0:
+        if epoch % save_period == 0 and epoch != 0:
             temp_model_fn = output_dir / 'checkpoint-epoch{}.pth'.format(epoch+1)
             torch.save(model.state_dict(), temp_model_fn)
 
