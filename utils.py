@@ -14,6 +14,8 @@ import torch.nn.functional as F
 
 from tqdm import tqdm
 
+import config
+
 NAIP_2013_MEANS = np.array([117.00, 130.75, 122.50, 159.30])
 NAIP_2013_STDS = np.array([38.16, 36.68, 24.30, 66.22])
 NAIP_2017_MEANS = np.array([72.84, 86.83, 76.78, 130.82])
@@ -292,3 +294,48 @@ def count_parameters(model):
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     params = sum([np.prod(p.size()) for p in model_parameters])
     return params
+
+
+def do_nlcd_means_tuning(nlcd_means):
+    nlcd_means[2:, 1] -= 0
+    nlcd_means[3:7, 4] += 0.25
+    nlcd_means = nlcd_means / np.maximum(0, nlcd_means).sum(axis=1, keepdims=True)
+    nlcd_means[0, :] = 0
+    nlcd_means[-1, :] = 0
+    return nlcd_means
+
+
+def load_nlcd_stats(
+        stats_mu=config.LR_STATS_MU,
+        stats_sigma=config.LR_STATS_SIGMA,
+        class_weights=config.LR_CLASS_WEIGHTS,
+        lr_classes=config.LR_NCLASSES,
+        hr_classes=config.HR_NCLASSES,
+):
+    stats_mu = np.loadtxt(stats_mu)
+    assert lr_classes == stats_mu.shape[0]
+    assert hr_classes == (stats_mu.shape[1] + 1)
+    nlcd_means = np.concatenate([np.zeros((lr_classes, 1)), stats_mu], axis=1)
+    nlcd_means[nlcd_means == 0] = 0.000001
+    nlcd_means[:, 0] = 0
+    if stats_mu == "data/nlcd_mu.txt":
+        nlcd_means = do_nlcd_means_tuning(nlcd_means)
+
+    stats_sigma = np.loadtxt(stats_sigma)
+    assert lr_classes == stats_sigma.shape[0]
+    assert hr_classes == (stats_sigma.shape[1] + 1)
+    nlcd_vars = np.concatenate([np.zeros((lr_classes, 1)), stats_sigma], axis=1)
+    nlcd_vars[nlcd_vars < 0.0001] = 0.0001
+
+    if not class_weights:
+        nlcd_class_weights = np.ones((lr_classes,))
+    else:
+        nlcd_class_weights = np.loadtxt(class_weights)
+        assert lr_classes == nlcd_class_weights.shape[0]
+
+    return nlcd_class_weights, nlcd_means, nlcd_vars
+
+
+
+if __name__ == '__main__':
+    load_nlcd_stats()

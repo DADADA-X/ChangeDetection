@@ -27,7 +27,7 @@ from loss import *
 
 NUM_WORKERS = 4
 NUM_CHIPS_PER_TILE = 100
-CHIP_SIZE = 256
+CHIP_SIZE = 512
 INIT_LR = 0.001
 save_period = 10
 
