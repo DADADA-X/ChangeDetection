@@ -169,8 +169,8 @@ def main():
 
     trainable_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = optim.AdamW(trainable_params, lr=INIT_LR, amsgrad=True, weight_decay=5e-4)
-    # criterion = nn.CrossEntropyLoss() # todo
-    criterion = balanced_ce_loss
+    criterion = nn.CrossEntropyLoss() # todo
+    # criterion = balanced_ce_loss
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
     # factor=0.5, patience=3, min_lr=0.0000001
     logger.info("Trainable parameters: {}".format(utils.count_parameters(model)))
@@ -205,6 +205,7 @@ def main():
             torch.save(model.state_dict(), temp_model_fn)
 
         if valid_loss_epoch < best_loss:
+            logger.info("Saving model_best.pth...")
             temp_model_fn = output_dir / 'model_best.pth'
             torch.save(model.state_dict(), temp_model_fn)
             best_loss = valid_loss_epoch
