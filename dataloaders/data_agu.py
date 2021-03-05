@@ -69,6 +69,10 @@ def nodata_check(img, labels):
     return np.any(labels == 0) or np.any(np.sum(img == 0, axis=2) == 4)
 
 
+def nodata_check2(labels):
+    return (labels != 0).sum() / labels.size < 0.09
+
+
 class Compose:
     def __init__(self, transforms):
         self.transforms = transforms

@@ -163,8 +163,7 @@ def fit(model, device, train_loader, valid_loader, num_images, optimizer, lr_cri
     return train_avg_loss, valid_avg_loss
 
 
-def fit2(model, device, train_loader, valid_loader, num_images, optimizer, criterion, epoch, logger, log_step=1,
-        memo=''):
+def fit2(model, device, train_loader, valid_loader, optimizer, criterion, epoch, logger, log_step=1):
     logger.info('------------ Training Epoch {} ------------'.format(epoch + 1))
     model.train()
     train_epoch_loss = AverageMeter()
@@ -188,11 +187,12 @@ def fit2(model, device, train_loader, valid_loader, num_images, optimizer, crite
 
         if batch_idx % log_step == 0:
             current = batch_idx * train_loader.batch_size
+            total = len(train_loader.dataset)
             logger.info('Train Epoch: {}\t [{:2d}/{:2d} ({:2.0f}%)]\t Loss: {:.6f}'.format(
                 epoch + 1,
                 current,
-                num_images,
-                current / num_images * 100,
+                total,
+                current / total * 100,
                 train_iter_loss.avg))
             train_iter_loss.reset()
 
@@ -201,7 +201,7 @@ def fit2(model, device, train_loader, valid_loader, num_images, optimizer, crite
     valid_epoch_loss = AverageMeter()
     # valid_iter_loss = AverageMeter()
     with torch.no_grad():
-        with tqdm(total=195 * valid_loader.batch_size, file=sys.stdout) as pbar:  # todo 195
+        with tqdm(total=len(valid_loader.dataset), file=sys.stdout) as pbar:  # todo 195
             for batch_idx, (img1, img2, targets) in enumerate(valid_loader):
                 pbar.update(valid_loader.batch_size)
                 img1 = img1.to(device)

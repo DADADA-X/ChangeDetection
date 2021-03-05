@@ -1,6 +1,8 @@
 import sys
 import os
-os.environ["CURL_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt" # A workaround in case this happens: https://github.com/mapbox/rasterio/issues/1289
+
+os.environ[
+    "CURL_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt"  # A workaround in case this happens: https://github.com/mapbox/rasterio/issues/1289
 import time
 import datetime
 import argparse
@@ -13,39 +15,35 @@ import pandas as pd
 from pathlib import Path
 
 import torch
+
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = True
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-import models
 import config
 import utils
-from dataloaders.StreamingDatasets import StreamingChangeDetTrainDataset, StreamingChangeDetValidDataset
+from dataloaders.TileDatasets import TileChangeDetectionDataset
 from dataloaders.data_agu import *
+from models import *
 from loss import *
 
-
 NUM_WORKERS = 4
-NUM_CHIPS_PER_TILE = config.NUM_CHIPS_PER_TILE_DET
-CHIP_SIZE = config.TRAIN_CHIP_SIZE_DET
 INIT_LR = 0.001
 
+train_img_t1_dir = Path("/home/data/xyj/competition-data/ChangeDetection/Train/image-2013")
+train_img_t2_dir = Path("/home/data/xyj/competition-data/ChangeDetection/Train/image-2017")
+train_lb_dir = Path("/home/data/xyj/competition-data/ChangeDetection/Train/labels")
+valid_img_t1_dir = Path("/home/data/xyj/competition-data/ChangeDetection/Valid/image-2013")
+valid_img_t2_dir = Path("/home/data/xyj/competition-data/ChangeDetection/Valid/image-2017")
+valid_lb_dir = Path("/home/data/xyj/competition-data/ChangeDetection/Valid/labels")
+
+
 parser = argparse.ArgumentParser(description='DFC2021 baseline training script')
-parser.add_argument('-t1', '--train_fn_t1', type=str, required=True,  help='The path to a train CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
-parser.add_argument('-t2', '--train_fn_t2', type=str, required=True,  help='The path to a train CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
-parser.add_argument('-v1', '--valid_fn_t1', type=str, required=True,  help='The path to a valid CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
-parser.add_argument('-v2', '--valid_fn_t2', type=str, required=True,  help='The path to a valid CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
-parser.add_argument('-o', '--output_dir', type=str, required=True,  help='The path to a directory to store model checkpoints.')
-# parser.add_argument('--overwrite', action="store_true",  help='Flag for overwriting `output_dir` if that directory already exists.')
-# parser.add_argument('--save_most_recent', action="store_true",  help='Flag for saving the most recent version of the model during training.')
-parser.add_argument('-m', '--model', default='VGG16Base',
-    choices=(
-        'VGG16Base', 'ResBase', 'EfficientBase'
-    ),
-    help='Model to use'
-)
+parser.add_argument('-o', '--output_dir', type=str, required=True,
+                    help='The path to a directory to store model checkpoints.')
+parser.add_argument('-m', '--model', type=str, default='VGG16Base')
 
 ## Training arguments
 # parser.add_argument('--gpu', type=int, default=0, help='The ID of the GPU to use')
@@ -80,10 +78,12 @@ def main():
     # -------------------
     # Setup
     # -------------------
-    assert os.path.exists(args.train_fn_t1)
-    assert os.path.exists(args.train_fn_t2)
-    assert os.path.exists(args.valid_fn_t1)
-    assert os.path.exists(args.valid_fn_t2)
+    assert train_img_t1_dir.exists()
+    assert train_img_t2_dir.exists()
+    assert train_lb_dir.exists()
+    assert valid_img_t1_dir.exists()
+    assert valid_img_t2_dir.exists()
+    assert valid_lb_dir.exists()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
@@ -99,34 +99,34 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    train_dataframe_t1 = pd.read_csv(args.train_fn_t1)
-    train_image_fns_t1 = train_dataframe_t1["image_fn"].values
-    train_label_fns_t1 = train_dataframe_t1["label_fn"].values
-    train_dataframe_t2 = pd.read_csv(args.train_fn_t2)
-    train_image_fns_t2 = train_dataframe_t2["image_fn"].values
-    train_label_fns_t2 = train_dataframe_t2["label_fn"].values
+    train_image_fns_t1 = [str(f) for f in train_img_t1_dir.glob("*.tif")]
+    train_image_fns_t2 = [str(f) for f in train_img_t2_dir.glob("*.tif")]
+    train_label_fns = [str(f) for f in train_lb_dir.glob("*.tif")]
+    train_image_fns_t1.sort()
+    train_image_fns_t2.sort()
+    train_label_fns.sort()
 
-    train_dataset = StreamingChangeDetTrainDataset(
-        image_fns_t1 = train_image_fns_t1,
-        label_fns_t1 = train_label_fns_t1,
-        image_fns_t2 = train_image_fns_t2,
-        label_fns_t2 = train_label_fns_t2,
-        transform=transform2
+    train_dataset = TileChangeDetectionDataset(
+        image_fns_t1=train_image_fns_t1,
+        image_fns_t2=train_image_fns_t2,
+        label_fns=train_label_fns,
+        transform=transform2,
+        data_aug_prob=0.5
     )
 
-    valid_dataframe_t1 = pd.read_csv(args.valid_fn_t1)
-    valid_image_fns_t1 = valid_dataframe_t1["image_fn"].values
-    valid_label_fns_t1 = valid_dataframe_t1["label_fn"].values
-    valid_dataframe_t2 = pd.read_csv(args.valid_fn_t2)
-    valid_image_fns_t2 = valid_dataframe_t2["image_fn"].values
-    valid_label_fns_t2 = valid_dataframe_t2["label_fn"].values
+    valid_image_fns_t1 = [str(f) for f in valid_img_t1_dir.glob("*.tif")]
+    valid_image_fns_t2 = [str(f) for f in valid_img_t2_dir.glob("*.tif")]
+    valid_label_fns = [str(f) for f in valid_lb_dir.glob("*.tif")]
+    valid_image_fns_t1.sort()
+    valid_image_fns_t2.sort()
+    valid_label_fns.sort()
 
-    valid_dataset = StreamingChangeDetValidDataset(
+    valid_dataset = TileChangeDetectionDataset(
         image_fns_t1=valid_image_fns_t1,
-        label_fns_t1=valid_label_fns_t1,
         image_fns_t2=valid_image_fns_t2,
-        label_fns_t2=valid_label_fns_t2,
-        transform=transform2
+        label_fns=valid_label_fns,
+        transform=transform2,
+        data_aug_prob=0
     )
 
     train_dataloader = torch.utils.data.DataLoader(
@@ -142,9 +142,7 @@ def main():
         pin_memory=True,
     )
 
-    num_training_images_per_epoch = int(len(train_image_fns_t1) * NUM_CHIPS_PER_TILE)
-
-    model = eval(args.model)
+    model = eval(args.model)()
     weights_init(model, seed=args.seed)
     model = model.to(device)
     if len(device_ids) > 1:
@@ -156,9 +154,9 @@ def main():
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
     logger.info("Trainable parameters: {}".format(utils.count_parameters(model)))
 
-    #-------------------
+    # -------------------
     # Model training
-    #-------------------
+    # -------------------
     train_loss_total_epochs, valid_loss_total_epochs, epoch_lr = [], [], []
     best_loss = 1e50
     num_times_lr_dropped = 0
@@ -171,7 +169,6 @@ def main():
             device,
             train_dataloader,
             valid_dataloader,
-            num_training_images_per_epoch,
             optimizer,
             criterion,
             epoch,
@@ -180,7 +177,7 @@ def main():
         scheduler.step(valid_loss_epoch)
 
         if epoch % config.SAVE_PERIOD == 0 and epoch != 0:
-            temp_model_fn = output_dir / 'checkpoint-epoch{}.pth'.format(epoch+1)
+            temp_model_fn = output_dir / 'checkpoint-epoch{}.pth'.format(epoch + 1)
             torch.save(model.state_dict(), temp_model_fn)
 
         if valid_loss_epoch < best_loss:

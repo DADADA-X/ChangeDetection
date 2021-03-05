@@ -6,9 +6,6 @@ import torch.nn.functional as F
 from models.efficientnet import EfficientNet
 
 
-__all__ = ['VGG16Base', 'ResBase', 'EfficientBase']
-
-
 class VGG16Base(nn.Module):
     def __init__(self):
         super(VGG16Base, self).__init__()
@@ -53,6 +50,92 @@ class VGG16Base(nn.Module):
         out = self.decoder2(out + t1_2 + t2_2)
 
         out = self.out(out + t1_1 + t2_1)
+
+        return out
+
+
+class VGG16Base2(nn.Module):
+    def __init__(self):
+        super(VGG16Base2, self).__init__()
+        self.encoder1 = se_conv_block(4, 64)
+        self.encoder2 = se_conv_block(64, 128)
+        self.encoder3 = se_conv_block(128, 256)
+        self.encoder4 = se_conv_block(256, 512)
+        self.encoder5 = se_conv_block(512, 512)
+
+        self.mp = nn.MaxPool2d(kernel_size=2)
+
+        self.decoder5 = deconv_block(512*2, 512)
+        self.decoder4 = nn.Sequential(conv_block(512*3, 512), deconv_block(512, 256))
+        self.decoder3 = nn.Sequential(conv_block(256*3, 256), deconv_block(256, 128))
+        self.decoder2 = nn.Sequential(conv_block(128*3, 128), deconv_block(128, 64))
+
+        self.out = nn.Sequential(conv_block(64*3, 64), nn.Conv2d(64, 2, 1))
+
+    def forward(self, t1, t2):
+        t1_1 = self.encoder1(t1)
+        t1_2 = self.encoder2(self.mp(t1_1))
+        t1_3 = self.encoder3(self.mp(t1_2))
+        t1_4 = self.encoder4(self.mp(t1_3))
+        t1_5 = self.encoder5(self.mp(t1_4))
+
+        t2_1 = self.encoder1(t2)
+        t2_2 = self.encoder2(self.mp(t2_1))
+        t2_3 = self.encoder3(self.mp(t2_2))
+        t2_4 = self.encoder4(self.mp(t2_3))
+        t2_5 = self.encoder5(self.mp(t2_4))
+
+        out = self.decoder5(torch.cat([t1_5, t2_5], dim=1))
+        out = self.decoder4(torch.cat([out, t1_4, t2_4], dim=1))
+        out = self.decoder3(torch.cat([out, t1_3, t2_3], dim=1))
+        out = self.decoder2(torch.cat([out, t1_2, t2_2], dim=1))
+
+        out = self.out(torch.cat([out, t1_1, t2_1], dim=1))
+
+        return out
+
+
+class VGG16Base3(nn.Module):
+    def __init__(self):
+        super(VGG16Base3, self).__init__()
+        self.encoder1 = se_conv_block(4, 64)
+        self.encoder2 = se_conv_block(64, 128)
+        self.encoder3 = se_conv_block(128, 256)
+        self.encoder4 = se_conv_block(256, 512)
+        self.encoder5 = se_conv_block(512, 512)
+
+        self.mp = nn.MaxPool2d(kernel_size=2)
+
+        self.decoder5 = self._make_deconv_layer(DecoderBlock, 512 * 2, 512, stride=2)
+        self.decoder4 = self._make_deconv_layer(DecoderBlock, 512 * 3, 256, stride=2)
+        self.decoder3 = self._make_deconv_layer(DecoderBlock, 256 * 3, 128, stride=2)
+        self.decoder2 = self._make_deconv_layer(DecoderBlock, 128 * 3, 64, stride=2)
+
+        self.out = nn.Sequential(conv_block(64*3, 64), nn.Conv2d(64, 2, 1))
+
+    def _make_deconv_layer(self, block, inplanes, planes, stride=1):
+        layers = block(inplanes, planes, stride=stride)
+        return layers
+
+    def forward(self, t1, t2):
+        t1_1 = self.encoder1(t1)
+        t1_2 = self.encoder2(self.mp(t1_1))
+        t1_3 = self.encoder3(self.mp(t1_2))
+        t1_4 = self.encoder4(self.mp(t1_3))
+        t1_5 = self.encoder5(self.mp(t1_4))
+
+        t2_1 = self.encoder1(t2)
+        t2_2 = self.encoder2(self.mp(t2_1))
+        t2_3 = self.encoder3(self.mp(t2_2))
+        t2_4 = self.encoder4(self.mp(t2_3))
+        t2_5 = self.encoder5(self.mp(t2_4))
+
+        out = self.decoder5(torch.cat([t1_5, t2_5], dim=1))
+        out = self.decoder4(torch.cat([out, t1_4, t2_4], dim=1))
+        out = self.decoder3(torch.cat([out, t1_3, t2_3], dim=1))
+        out = self.decoder2(torch.cat([out, t1_2, t2_2], dim=1))
+
+        out = self.out(torch.cat([out, t1_1, t2_1], dim=1))
 
         return out
 
@@ -327,6 +410,6 @@ class DecoderBlock(nn.Module):
 if __name__ == '__main__':
     t1 = torch.randn(1, 4, 256, 256)
     t2 = torch.randn(1, 4, 256, 256)
-    model = EfficientBase()
+    model = VGG16Base3()
     print(model)
     print(model(t1, t2).shape)
