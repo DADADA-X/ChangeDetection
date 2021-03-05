@@ -1,18 +1,20 @@
 import sys
-
+import cv2
 import numpy as np
 
 import rasterio
 from rasterio.windows import Window
 from rasterio.errors import RasterioError, RasterioIOError
 
-import torch 
+import torch
 from torchvision import transforms
 from torch.utils.data.dataset import IterableDataset
 
+import config
+
 
 class StreamingGeospatialDataset(IterableDataset):
-    
+
     def __init__(self, imagery_fns, label_fns=None, groups=None, chip_size=256, num_chips_per_tile=200, windowed_sampling=False, transform=None, nodata_check=None, verbose=False):
         """A torch Dataset for randomly sampling chips from a list of tiles. When used in conjunction with a DataLoader that has `num_workers>1` this Dataset will assign each worker to sample chips from disjoint sets of tiles.
 
@@ -33,7 +35,7 @@ class StreamingGeospatialDataset(IterableDataset):
             self.fns = imagery_fns
             self.use_labels = False
         else:
-            self.fns = list(zip(imagery_fns, label_fns)) 
+            self.fns = list(zip(imagery_fns, label_fns))
             self.use_labels = True
 
         self.groups = groups
@@ -152,14 +154,15 @@ class StreamingGeospatialDataset(IterableDataset):
 
                 # Transform the imagery and the labels
                 if self.transform is not None:
-                    img, labels = self.transform(img, labels, group, data_aug_prob=0)
+                    img, lr_labels, hr_labels = self.transform(img, labels, group, data_aug_prob=config.TRAIN_AUG_PROB)
                 else:
                     img = torch.from_numpy(img).squeeze()
-                    labels = torch.from_numpy(labels).squeeze()
+                    lr_labels = torch.from_numpy(cv2.resize(labels, (self.chip_size//32, self.chip_size//32)))
+                    hr_labels = torch.from_numpy(labels).squeeze()
 
                 # Note, that img should be a torch "Double" type (i.e. a np.float32) and labels should be a torch "Long" type (i.e. np.int64)
                 if self.use_labels:
-                    yield img, labels
+                    yield img, lr_labels, hr_labels
                 else:
                     yield img
 
@@ -299,14 +302,15 @@ class StreamingValidationDataset(IterableDataset):
 
                 # Transform the imagery and the labels
                 if self.transform is not None:
-                    img, labels = self.transform(img, labels, group, data_aug_prob=0)
+                    img, lr_labels, hr_labels = self.transform(img, labels, group, data_aug_prob=config.VALID_AUG_PROB)
                 else:
                     img = torch.from_numpy(img).squeeze()
-                    labels = torch.from_numpy(labels).squeeze()
+                    lr_labels = torch.from_numpy(cv2.resize(labels, (self.chip_size//32, self.chip_size//32)))
+                    hr_labels = torch.from_numpy(labels).squeeze()
 
                 # Note, that img should be a torch "Double" type (i.e. a np.float32) and labels should be a torch "Long" type (i.e. np.int64)
                 if self.use_labels:
-                    yield img, labels
+                    yield img, lr_labels, hr_labels
                 else:
                     yield img
 
@@ -322,3 +326,244 @@ class StreamingValidationDataset(IterableDataset):
         if self.verbose:
             print("Creating a new TileValidationDataset iterator")
         return iter(self.stream_chips())
+
+
+class StreamingChangeDetTrainDataset(IterableDataset):
+
+    def __init__(self, image_fns_t1, label_fns_t1, image_fns_t2, label_fns_t2, chip_size=256, num_chips_per_tile=200,
+                 windowed_sampling=False, transform=None, nodata_check=None, verbose=False):
+        self.fns = list(zip(image_fns_t1, label_fns_t1, image_fns_t2, label_fns_t2))
+        self.chip_size = chip_size
+        self.num_chips_per_tile = num_chips_per_tile
+        self.windowed_sampling = windowed_sampling
+
+        self.transform = transform
+        self.nodata_check = nodata_check
+
+        self.verbose = verbose
+
+        if self.verbose:
+            print("Constructed StreamingGeospatialDataset")
+
+    def stream_tile_fns(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:  # In this case we are not loading through a DataLoader with multiple workers
+            worker_id = 0
+            num_workers = 1
+        else:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+
+        # We only want to shuffle the order we traverse the files if we are the first worker (else, every worker will shuffle the files...)
+        if worker_id == 0:
+            np.random.shuffle(self.fns)  # in place
+        # NOTE: A warning, when different workers are created they will all have the same numpy random seed, however will have different torch random seeds. If you want to use numpy random functions, seed appropriately.
+        # seed = torch.randint(low=0,high=2**32-1,size=(1,)).item()
+        # np.random.seed(seed) # when different workers spawn, they have the same numpy random seed...
+
+        if self.verbose:
+            print("Creating a filename stream for worker %d" % (worker_id))
+
+        # This logic splits up the list of filenames into `num_workers` chunks. Each worker will recieve ceil(num_filenames / num_workers) filenames to generate chips from. If the number of workers doesn't divide the number of filenames evenly then the last worker will have fewer filenames.
+        N = len(self.fns)
+        num_files_per_worker = int(np.ceil(N / num_workers))
+        lower_idx = worker_id * num_files_per_worker
+        upper_idx = min(N, (worker_id + 1) * num_files_per_worker)
+        for idx in range(lower_idx, upper_idx):
+
+            img_fn_t1, label_fn_t1, img_fn_t2, label_fn_t2 = self.fns[idx]
+
+            if self.verbose:
+                print("Worker %d, yielding file %d" % (worker_id, idx))
+
+            yield (img_fn_t1, label_fn_t1, img_fn_t2, label_fn_t2)
+
+    def stream_chips(self):
+        for img_fn_t1, label_fn_t1, img_fn_t2, label_fn_t2 in self.stream_tile_fns():
+            num_skipped_chips = 0
+
+            # Open file pointers
+            img_fp_t1 = rasterio.open(img_fn_t1, "r")
+            label_fp_t1 = rasterio.open(label_fn_t1, "r")
+            img_fp_t2 = rasterio.open(img_fn_t2, "r")
+            label_fp_t2 = rasterio.open(label_fn_t2, "r")
+
+            height, width = img_fp_t1.shape
+
+            # If we aren't in windowed sampling mode then we should read the entire tile up front
+            try:
+                img_data_t1 = np.rollaxis(img_fp_t1.read(), 0, 3)
+                img_data_t2 = np.rollaxis(img_fp_t2.read(), 0, 3)
+                label_data = (label_fp_t1.read().squeeze() != label_fp_t2.read().squeeze()).astype(np.uint8)
+            except RasterioError as e:
+                print("WARNING: Error reading in entire file, skipping to the next file")
+                continue
+
+            for i in range(self.num_chips_per_tile):
+                # Select the top left pixel of our chip randomly
+                x = np.random.randint(0, width - self.chip_size)
+                y = np.random.randint(0, height - self.chip_size)
+
+                # Read imagery / labels
+                img_t1 = img_data_t1[y:y + self.chip_size, x:x + self.chip_size, :]
+                img_t2 = img_data_t2[y:y + self.chip_size, x:x + self.chip_size, :]
+                labels = label_data[y:y + self.chip_size, x:x + self.chip_size]
+
+                # Transform the imagery and the labels
+                if self.transform is not None:
+                    img_t1, img_t2, labels = self.transform(img_t1, img_t2, labels, data_aug_prob=config.VALID_AUG_PROB)
+                else:
+                    img_t1 = torch.from_numpy(img_t1).squeeze()
+                    img_t2 = torch.from_numpy(img_t2).squeeze()
+                    labels = torch.from_numpy(labels).squeeze()
+
+                # Note, that img should be a torch "Double" type (i.e. a np.float32) and labels should be a torch "Long" type (i.e. np.int64)
+                yield img_t1, img_t2, labels
+
+            # Close file pointers
+            img_fp_t1.close()
+            img_fp_t2.close()
+            label_fp_t1.close()
+            label_fp_t2.close()
+
+            if num_skipped_chips > 0 and self.verbose:
+                print("We skipped %d chips on %s" % (num_skipped_chips, img_fn_t1))
+
+    def __iter__(self):
+        if self.verbose:
+            print("Creating a new StreamingGeospatialDataset iterator")
+        return iter(self.stream_chips())
+
+
+class StreamingChangeDetValidDataset(IterableDataset):
+
+    def __init__(self, image_fns_t1, label_fns_t1, image_fns_t2, label_fns_t2, chip_size=256, stride=256,
+                 windowed_sampling=False, transform=None, nodata_check=None, verbose=False):
+        self.fns = list(zip(image_fns_t1, label_fns_t1, image_fns_t2, label_fns_t2))
+        self.chip_size = chip_size
+        self.stride = stride
+        self.windowed_sampling = windowed_sampling
+
+        self.transform = transform
+        self.nodata_check = nodata_check
+
+        self.verbose = verbose
+
+        if self.verbose:
+            print("Constructed StreamingGeospatialDataset")
+
+    def stream_tile_fns(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:  # In this case we are not loading through a DataLoader with multiple workers
+            worker_id = 0
+            num_workers = 1
+        else:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+
+        # We only want to shuffle the order we traverse the files if we are the first worker (else, every worker will shuffle the files...)
+        if worker_id == 0:
+            np.random.shuffle(self.fns)  # in place
+        # NOTE: A warning, when different workers are created they will all have the same numpy random seed, however will have different torch random seeds. If you want to use numpy random functions, seed appropriately.
+        # seed = torch.randint(low=0,high=2**32-1,size=(1,)).item()
+        # np.random.seed(seed) # when different workers spawn, they have the same numpy random seed...
+
+        if self.verbose:
+            print("Creating a filename stream for worker %d" % (worker_id))
+
+        # This logic splits up the list of filenames into `num_workers` chunks. Each worker will recieve ceil(num_filenames / num_workers) filenames to generate chips from. If the number of workers doesn't divide the number of filenames evenly then the last worker will have fewer filenames.
+        N = len(self.fns)
+        num_files_per_worker = int(np.ceil(N / num_workers))
+        lower_idx = worker_id * num_files_per_worker
+        upper_idx = min(N, (worker_id + 1) * num_files_per_worker)
+        for idx in range(lower_idx, upper_idx):
+
+            img_fn_t1, label_fn_t1, img_fn_t2, label_fn_t2 = self.fns[idx]
+
+            if self.verbose:
+                print("Worker %d, yielding file %d" % (worker_id, idx))
+
+            yield (img_fn_t1, label_fn_t1, img_fn_t2, label_fn_t2)
+
+    def stream_chips(self):
+        for img_fn_t1, label_fn_t1, img_fn_t2, label_fn_t2 in self.stream_tile_fns():
+            num_skipped_chips = 0
+
+            # Open file pointers
+            img_fp_t1 = rasterio.open(img_fn_t1, "r")
+            label_fp_t1 = rasterio.open(label_fn_t1, "r")
+            img_fp_t2 = rasterio.open(img_fn_t2, "r")
+            label_fp_t2 = rasterio.open(label_fn_t2, "r")
+
+            height, width = img_fp_t1.shape
+
+            # If we aren't in windowed sampling mode then we should read the entire tile up front
+            try:
+                img_data_t1 = np.rollaxis(img_fp_t1.read(), 0, 3)
+                img_data_t2 = np.rollaxis(img_fp_t2.read(), 0, 3)
+                label_data = (label_fp_t1.read().squeeze() != label_fp_t2.read().squeeze()).astype(np.uint8)
+            except RasterioError as e:
+                print("WARNING: Error reading in entire file, skipping to the next file")
+                continue
+
+            chip_coordinates = []  # upper left coordinate (y,x), of each chip that this Dataset will return
+            for y in list(range(0, height - self.chip_size, self.stride)) + [height - self.chip_size]:
+                for x in list(range(0, width - self.chip_size, self.stride)) + [width - self.chip_size]:
+                    chip_coordinates.append((y, x))
+
+            for y, x in chip_coordinates:
+                # Read imagery / labels
+                img_t1 = img_data_t1[y:y + self.chip_size, x:x + self.chip_size, :]
+                img_t2 = img_data_t2[y:y + self.chip_size, x:x + self.chip_size, :]
+                labels = label_data[y:y + self.chip_size, x:x + self.chip_size]
+
+                # Transform the imagery and the labels
+                if self.transform is not None:
+                    img_t1, img_t2, labels = self.transform(img_t1, img_t2, labels, data_aug_prob=config.TRAIN_AUG_PROB)
+                else:
+                    img_t1 = torch.from_numpy(img_t1).squeeze()
+                    img_t2 = torch.from_numpy(img_t2).squeeze()
+                    labels = torch.from_numpy(labels).squeeze()
+
+                # Note, that img should be a torch "Double" type (i.e. a np.float32) and labels should be a torch "Long" type (i.e. np.int64)
+                yield img_t1, img_t2, labels
+
+            # Close file pointers
+            img_fp_t1.close()
+            img_fp_t2.close()
+            label_fp_t1.close()
+            label_fp_t2.close()
+
+            if num_skipped_chips > 0 and self.verbose:
+                print("We skipped %d chips on %s" % (num_skipped_chips, img_fn_t1))
+
+    def __iter__(self):
+        if self.verbose:
+            print("Creating a new StreamingGeospatialDataset iterator")
+        return iter(self.stream_chips())
+
+
+if __name__ == '__main__':
+    import pandas as pd
+    from dataloaders.data_agu import *
+    train_fn_2013 = "/home/xyj/code/dfc2021-msd-baseline/data/splits/training_set_naip_nlcd_2013_local.csv"
+    train_fn_2017 = "/home/xyj/code/dfc2021-msd-baseline/data/splits/training_set_naip_nlcd_2017_local.csv"
+
+    train_dataframe_2013 = pd.read_csv(train_fn_2013)
+    train_image_fns_2013 = train_dataframe_2013["image_fn"].values
+    train_label_fns_2013 = train_dataframe_2013["label_fn"].values
+    train_groups_2013 = train_dataframe_2013["group"].values
+    train_dataframe_2017 = pd.read_csv(train_fn_2017)
+    train_image_fns_2017 = train_dataframe_2017["image_fn"].values
+    train_label_fns_2017 = train_dataframe_2017["label_fn"].values
+    train_groups_2017 = train_dataframe_2017["group"].values
+
+    dataset = StreamingChangeDetValidDataset(
+        image_fns_t1 = train_image_fns_2013,
+        label_fns_t1 = train_label_fns_2013,
+        image_fns_t2 = train_image_fns_2017,
+        label_fns_t2 = train_label_fns_2017,
+        transform=transform2
+    )
+    for data in dataset:
+        print(data)

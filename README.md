@@ -37,9 +37,9 @@ The accompanying arxiv paper compares U-Nets and small fully convolutional neura
 
 The 5 baseline methods we describe are:
 - (NLCD difference) This simply computes change directly from the NLCD 2013 and NLCD 2016 data layers. We expect this method to perform poorly as NLCD is at a 30m resolution, does not include any changes that happened in 2017, and will systematically miss some types of changes.
-- (FCN both) This is a simple [fully convolutional network (FCN)](models.py#L13) trained on pairs of both (NAIP 2013, NLCD 2013) and (NAIP 2017, NLCD 2016) imagery and labels. The trained model is then used to make indepedent predictions for the NAIP 2013 and NAIP 2017 imagery. The land cover change is calculated as a difference between the two predicted layers.
+- (FCN both) This is a simple [fully convolutional network (FCN)](models/models.py#L13) trained on pairs of both (NAIP 2013, NLCD 2013) and (NAIP 2017, NLCD 2016) imagery and labels. The trained model is then used to make indepedent predictions for the NAIP 2013 and NAIP 2017 imagery. The land cover change is calculated as a difference between the two predicted layers.
 - (FCN separate) This is two FCNs -- one is trained on pairs of (NAIP 2013, NLCD 2013) imagery and labels, and the other is trained on pairs of (NAIP 2017, NLCD 2016) imagery and labels. Similar to "FCN both", the trained models are then used to make indepedent predictions for the NAIP 2013 and NAIP 2017 imagery. The land cover change is calculated as a difference between the two predicted layers.
-- (U-Net both) This is the same as "FCN both", but with a [U-Net architecture](models.py#L35).
+- (U-Net both) This is the same as "FCN both", but with a [U-Net architecture](models/models.py#L35).
 - (U-Net separate) This is the same as "FCN separate", but with a U-Net architecture.
 
 

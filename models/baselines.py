@@ -9,6 +9,8 @@ import torch.nn.functional as F
 # import segmentation_models_pytorch as smp
 
 import utils
+import config
+
 
 class FCN(nn.Module):
 
@@ -40,4 +42,12 @@ def get_unet():
     # )
 
 def get_fcn():
-    return FCN(num_input_channels=4, num_output_classes=len(utils.NLCD_CLASSES), num_filters=64)
+    return FCN(num_input_channels=4, num_output_classes=len(config.NLCD_CLASSES), num_filters=64)
+
+
+if __name__ == '__main__':
+    model = get_unet()
+    input = torch.randn(2, 4, 224, 224)
+    print(model)
+    output = model(input)
+    print(output.shape)

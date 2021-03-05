@@ -20,37 +20,44 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 import models
+import config
 import utils
 from dataloaders.StreamingDatasets import StreamingGeospatialDataset, StreamingValidationDataset
 from dataloaders.data_agu import *
 from loss import *
 
 NUM_WORKERS = 4
-NUM_CHIPS_PER_TILE = 100
-CHIP_SIZE = 512
+NUM_CHIPS_PER_TILE = config.NUM_CHIPS_PER_TILE
+CHIP_SIZE = config.TRAIN_CHIP_SIZE
 INIT_LR = 0.001
-save_period = 10
 
 parser = argparse.ArgumentParser(description='DFC2021 baseline training script')
-parser.add_argument('--train_fn', type=str, required=True,  help='The path to a train CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
-parser.add_argument('--valid_fn', type=str, required=True,  help='The path to a valid CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
-parser.add_argument('--output_dir', type=str, required=True,  help='The path to a directory to store model checkpoints.')
-parser.add_argument('--overwrite', action="store_true",  help='Flag for overwriting `output_dir` if that directory already exists.')
-parser.add_argument('--save_most_recent', action="store_true",  help='Flag for saving the most recent version of the model during training.')
-parser.add_argument('--model', default='unet',
+parser.add_argument('-t', '--train_fn', type=str, required=True,  help='The path to a train CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
+parser.add_argument('-v', '--valid_fn', type=str, required=True,  help='The path to a valid CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
+parser.add_argument('-o', '--output_dir', type=str, required=True,  help='The path to a directory to store model checkpoints.')
+# parser.add_argument('--overwrite', action="store_true",  help='Flag for overwriting `output_dir` if that directory already exists.')
+# parser.add_argument('--save_most_recent', action="store_true",  help='Flag for saving the most recent version of the model during training.')
+parser.add_argument('-bb', '--backbone', default='efficientnet-b0',
     choices=(
-        'unet',
-        'fcn'
+        'efficientnet-b0',
+        'efficientnet-b1',
+        'efficientnet-b2',
+        'efficientnet-b3',
+        'efficientnet-b4',
+        'efficientnet-b5',
+        'efficientnet-b6',
+        'efficientnet-b7',
+        'efficientnet-b0'
     ),
-    help='Model to use'
+    help='Backbone to use'
 )
 
 ## Training arguments
 # parser.add_argument('--gpu', type=int, default=0, help='The ID of the GPU to use')
-parser.add_argument('--gpu', type=str, default=None, help='The indices of GPUs to enable (default: all)')
-parser.add_argument('--batch_size', type=int, default=32, help='Batch size to use for training (default: 32)')
-parser.add_argument('--num_epochs', type=int, default=50, help='Number of epochs to train for (default: 50)')
-parser.add_argument('--seed', type=int, default=0, help='Random seed to pass to numpy and torch (default: 0)')
+parser.add_argument('-g', '--gpu', type=str, default=None, help='The indices of GPUs to enable (default: all)')
+parser.add_argument('-bs', '--batch_size', type=int, default=32, help='Batch size to use for training (default: 32)')
+parser.add_argument('-e', '--num_epochs', type=int, default=50, help='Number of epochs to train for (default: 50)')
+parser.add_argument('-s', '--seed', type=int, default=0, help='Random seed to pass to numpy and torch (default: 0)')
 args = parser.parse_args()
 
 
@@ -154,12 +161,14 @@ def main():
     #-------------------
     # Setup training
     #-------------------
-    if args.model == "unet":
-        model = models.get_unet()
-    elif args.model == "fcn":
-        model = models.get_fcn()
-    else:
-        raise ValueError("Invalid model")
+    # if args.model == "unet":
+    #     model = models.get_unet()
+    # elif args.model == "fcn":
+    #     model = models.get_fcn()
+    # else:
+    #     raise ValueError("Invalid model")
+
+    model = models.isCNN(args.backbone)
 
     weights_init(model, seed=args.seed)
 
@@ -169,7 +178,8 @@ def main():
 
     trainable_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = optim.AdamW(trainable_params, lr=INIT_LR, amsgrad=True, weight_decay=5e-4)
-    criterion = nn.CrossEntropyLoss() # todo
+    lr_criterion = nn.CrossEntropyLoss(ignore_index=0) # todo
+    hr_criterion = hr_loss
     # criterion = balanced_ce_loss
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
     # factor=0.5, patience=3, min_lr=0.0000001
@@ -194,13 +204,14 @@ def main():
             valid_dataloader,
             num_training_images_per_epoch,
             optimizer,
-            criterion,
+            lr_criterion,
+            hr_criterion,
             epoch,
             logger)
 
         scheduler.step(valid_loss_epoch)
 
-        if epoch % save_period == 0 and epoch != 0:
+        if epoch % config.SAVE_PERIOD == 0 and epoch != 0:
             temp_model_fn = output_dir / 'checkpoint-epoch{}.pth'.format(epoch+1)
             torch.save(model.state_dict(), temp_model_fn)
 

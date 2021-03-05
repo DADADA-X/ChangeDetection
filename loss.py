@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+import config
 import utils
 
 
@@ -18,58 +19,34 @@ def balanced_ce_loss(pred, gt):
 
 def hr_loss(pred, gt):
     """
-    high resolution loss:  CrossEntropy
+    high resolution loss: Simplified LABEL SUPER-RESOLUTION NETWORKS
     """
-    pass
+
+    pred_ = F.log_softmax(pred, dim=1)
+    gt_ = to_soft_label(gt)
+
+    loss = -torch.einsum('bchw, bchw->bhw', [pred_, gt_])
+
+    mask = gt != 0
+    mask_size = mask.sum()
+    loss = (loss * mask).sum()/mask_size
+
+    return loss
 
 
-def sr_loss(pred, gt):
-    """
-    super resolution loss: LABEL SUPER-RESOLUTION NETWORKS
-    """
-    nlcd_class_weights, nlcd_means, nlcd_vars = utils.load_nlcd_stats()
-    super_res_crit = 0
-    mask_size = (torch.sum(gt, axis=[1, 2, 3]) + 10).unsqueeze(-1)  # shape 16x1
-    for nlcd_idx in range(nlcd_class_weights.shape[0]):
-        c_mask = gt[:, 0, :, :].unsqueeze(1)  # shape 16x1x240x240
-        c_mask_size = torch.sum(c_mask, axis=(2, 3)) + 0.000001  # shape 16x1
+def to_soft_label(tensor):
+    nlcd_to_reduced_lc_accumulator = torch.Tensor(config.NLCD_IDX_TO_REDUCED_LC_ACCUMULATOR).cuda()
+    soft_label = nlcd_to_reduced_lc_accumulator[tensor].permute(0, 3, 1, 2)
+    return soft_label
 
-        c_interval_center = nlcd_means[nlcd_idx]  # shape 5,
-        c_interval_radius = nlcd_vars[nlcd_idx]  # shape 5,
 
-        masked_probs = (
-                pred * c_mask
-        )  # (16x5x240x240) * (16x1x240x240) --> shape (16x5x240x240)
-
-        # Mean mean of predicted distribution todo
-        mean = (
-                torch.sum(masked_probs, axis=(2, 3)) / c_mask_size
-        )  # (16x5) / (16,1) --> shape 16x5
-
-        # Mean var of predicted distribution
-        var = torch.sum(masked_probs * (1.0 - masked_probs), axis=(2, 3)) / (
-                c_mask_size * c_mask_size
-        )  # (16x5) / (16,1) --> shape 16x5
-
-        c_super_res_crit = torch.square(
-            ddist(mean, c_interval_center, c_interval_radius)
-        )  # calculate numerator of equation 7 in ICLR paper
-        c_super_res_crit = c_super_res_crit / (
-                var + (c_interval_radius * c_interval_radius) + 0.000001
-        )  # calculate denominator
-        c_super_res_crit = c_super_res_crit + torch.log(
-            var + 0.03
-        )  # calculate log term
-        c_super_res_crit = (
-                c_super_res_crit
-                * (c_mask_size / mask_size)
-                * nlcd_class_weights[nlcd_idx]
-        )  # weight by the fraction of NLCD pixels and the NLCD class weight
-
-        super_res_crit = super_res_crit + c_super_res_crit  # accumulate
-
-    super_res_crit = torch.sum(super_res_crit, axis=1)  # sum superres loss across highres classes
-    return super_res_crit
+def to_one_hot_var(tensor, num_class):
+    if len(tensor.shape) == 3:
+        tensor = tensor.unsqueeze(1)
+    n, c, h, w = tensor.shape
+    one_hot = tensor.new(n, num_class, h, w).fill_(0)
+    one_hot = one_hot.scatter_(1, tensor.to(torch.int64), 1)
+    return one_hot
 
 
 def ddist(prediction, c_interval_center, c_interval_radius):
@@ -78,5 +55,5 @@ def ddist(prediction, c_interval_center, c_interval_radius):
 
 if __name__ == '__main__':
     pred = torch.randn(16, 5, 240, 240)
-    gt = torch.randint(0, 2, (16, 17, 240, 240))
-    sr_loss(pred, gt)
+    gt = torch.randint(0, 17, (16, 240, 240))
+    print(hr_loss(pred, gt))

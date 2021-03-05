@@ -16,44 +16,18 @@ from tqdm import tqdm
 
 import config
 
-NAIP_2013_MEANS = np.array([117.00, 130.75, 122.50, 159.30])
-NAIP_2013_STDS = np.array([38.16, 36.68, 24.30, 66.22])
-NAIP_2017_MEANS = np.array([72.84, 86.83, 76.78, 130.82])
-NAIP_2017_STDS = np.array([41.78, 34.66, 28.76, 58.95])
-NLCD_CLASSES = [0, 11, 12, 21, 22, 23, 24, 31, 41, 42, 43, 52, 71, 81, 82, 90,
-                95]  # 16 classes + 1 nodata class ("0"). Note that "12" is "Perennial Ice/Snow" and is not present in Maryland.
-
-NLCD_CLASS_COLORMAP = {  # Copied from the emebedded color table in the NLCD data files
-    0: (0, 0, 0, 255),
-    11: (70, 107, 159, 255),
-    12: (209, 222, 248, 255),
-    21: (222, 197, 197, 255),
-    22: (217, 146, 130, 255),
-    23: (235, 0, 0, 255),
-    24: (171, 0, 0, 255),
-    31: (179, 172, 159, 255),
-    41: (104, 171, 95, 255),
-    42: (28, 95, 44, 255),
-    43: (181, 197, 143, 255),
-    52: (204, 184, 121, 255),
-    71: (223, 223, 194, 255),
-    81: (220, 217, 57, 255),
-    82: (171, 108, 40, 255),
-    90: (184, 217, 235, 255),
-    95: (108, 159, 184, 255)
-}
 
 NLCD_IDX_COLORMAP = {
-    idx: NLCD_CLASS_COLORMAP[c]
-    for idx, c in enumerate(NLCD_CLASSES)
+    idx: config.NLCD_CLASS_COLORMAP[c]
+    for idx, c in enumerate(config.NLCD_CLASSES)
 }
 
 
 def get_nlcd_class_to_idx_map():
     nlcd_label_to_idx_map = []
     idx = 0
-    for i in range(NLCD_CLASSES[-1] + 1):
-        if i in NLCD_CLASSES:
+    for i in range(config.NLCD_CLASSES[-1] + 1):
+        if i in config.NLCD_CLASSES:
             nlcd_label_to_idx_map.append(idx)
             idx += 1
         else:
@@ -64,45 +38,6 @@ def get_nlcd_class_to_idx_map():
 
 NLCD_CLASS_TO_IDX_MAP = get_nlcd_class_to_idx_map()  # I do this computation on import for illustration (this could instead be a length 96 vector that is hardcoded here)
 
-NLCD_IDX_TO_REDUCED_LC_MAP = np.array([
-    4,  # 0 No data 0
-    0,  # 1 Open Water
-    4,  # 2 Ice/Snow
-    2,  # 3 Developed Open Space
-    3,  # 4 Developed Low Intensity
-    3,  # 5 Developed Medium Intensity
-    3,  # 6 Developed High Intensity
-    3,  # 7 Barren Land
-    1,  # 8 Deciduous Forest
-    1,  # 9 Evergreen Forest
-    1,  # 10 Mixed Forest
-    1,  # 11 Shrub/Scrub
-    2,  # 12 Grassland/Herbaceous
-    2,  # 13 Pasture/Hay
-    2,  # 14 Cultivated Crops
-    1,  # 15 Woody Wetlands
-    1,  # 16 Emergent Herbaceious Wetlands
-])
-
-NLCD_IDX_TO_REDUCED_LC_ACCUMULATOR = np.array([
-    [0, 0, 0, 0, 1],  # 0 No data 0
-    [1, 0, 0, 0, 0],  # 1 Open Water
-    [0, 0, 0, 0, 1],  # 2 Ice/Snow
-    [0, 0, 0, 0, 0],  # 3 Developed Open Space
-    [0, 0, 0, 0, 0],  # 4 Developed Low Intensity
-    [0, 0, 0, 1, 0],  # 5 Developed Medium Intensity
-    [0, 0, 0, 1, 0],  # 6 Developed High Intensity
-    [0, 0, 0, 0, 0],  # 7 Barren Land
-    [0, 1, 0, 0, 0],  # 8 Deciduous Forest
-    [0, 1, 0, 0, 0],  # 9 Evergreen Forest
-    [0, 1, 0, 0, 0],  # 10 Mixed Forest
-    [0, 1, 0, 0, 0],  # 11 Shrub/Scrub
-    [0, 0, 1, 0, 0],  # 12 Grassland/Herbaceous
-    [0, 0, 1, 0, 0],  # 13 Pasture/Hay
-    [0, 0, 1, 0, 0],  # 14 Cultivated Crops
-    [0, 1, 0, 0, 0],  # 15 Woody Wetlands
-    [0, 1, 0, 0, 0],  # 16 Emergent Herbaceious Wetlands
-])
 
 NLCD_IDX_TRAIN_PROB = torch.Tensor(
     [0.00, 14.99, 0.00, 8.10, 4.47, 2.11, 0.81, 0.35, 20.75, 1.97, 8.28, 0.59, 0.45, 9.12, 17.22, 8.36, 2.42])
@@ -154,22 +89,25 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def fit(model, device, train_loader, valid_loader, num_images, optimizer, criterion, epoch, logger, log_step=1,
+def fit(model, device, train_loader, valid_loader, num_images, optimizer, lr_criterion, hr_criterion, epoch, logger, log_step=1,
         memo=''):
     logger.info('------------ Training Epoch {} ------------'.format(epoch + 1))
     model.train()
     train_epoch_loss = AverageMeter()
     train_iter_loss = AverageMeter()
     # tic = time.time()
-    for batch_idx, (data, targets) in enumerate(train_loader):
+    for batch_idx, (data, lr_targets, hr_targets) in enumerate(train_loader):
 
         # ------------- train -------------- #
         data = data.to(device)
-        targets = targets.to(device)
+        lr_targets = lr_targets.to(device)
+        hr_targets = hr_targets.to(device)
 
         optimizer.zero_grad()
-        outputs = model(data)
-        loss = criterion(outputs, targets)
+        lr_out, hr_out = model(data)
+        lr_loss = lr_criterion(lr_out, lr_targets)
+        hr_loss = hr_criterion(hr_out, hr_targets)
+        loss = config.GAMMA * hr_loss + config.ETA * lr_loss
         loss.backward()
         optimizer.step()
 
@@ -192,12 +130,85 @@ def fit(model, device, train_loader, valid_loader, num_images, optimizer, criter
     # valid_iter_loss = AverageMeter()
     with torch.no_grad():
         with tqdm(total=195 * valid_loader.batch_size, file=sys.stdout) as pbar:
-            for batch_idx, (data, targets) in enumerate(valid_loader):
+            for batch_idx, (data, lr_targets, hr_targets) in enumerate(valid_loader):
                 pbar.update(valid_loader.batch_size)
                 data = data.to(device)
+                lr_targets = lr_targets.to(device)
+                hr_targets = hr_targets.to(device)
+
+                lr_out, hr_out = model(data)
+                lr_loss = lr_criterion(lr_out, lr_targets)
+                hr_loss = hr_criterion(hr_out, hr_targets)
+                loss = config.GAMMA * hr_loss + config.ETA * lr_loss
+
+                # valid_iter_loss.update(loss.item())
+                valid_epoch_loss.update(loss.item())
+
+                # if batch_idx % log_step == 0:
+                #     current = batch_idx * 64  # todo
+                #     logger.info('Valid Epoch: {}\t [{:2d}/{:2d} ({:2.0f}%)]\t Loss: {:.6f}'.format(
+                #         epoch + 1,
+                #         current,
+                #         196 * 64,
+                #         current / 196,
+                #         valid_iter_loss.avg))
+                #     valid_iter_loss.reset()
+
+    train_avg_loss = train_epoch_loss.avg
+    valid_avg_loss = valid_epoch_loss.avg
+
+    logger.info('\nTraining Epoch: {}\n Train_Loss: {:.2f}\n Valid_Loss: {:.2f}\n'.format(
+        epoch + 1, train_avg_loss, valid_avg_loss))
+
+    return train_avg_loss, valid_avg_loss
+
+
+def fit2(model, device, train_loader, valid_loader, num_images, optimizer, criterion, epoch, logger, log_step=1,
+        memo=''):
+    logger.info('------------ Training Epoch {} ------------'.format(epoch + 1))
+    model.train()
+    train_epoch_loss = AverageMeter()
+    train_iter_loss = AverageMeter()
+    # tic = time.time()
+    for batch_idx, (img1, img2, targets) in enumerate(train_loader):
+
+        # ------------- train -------------- #
+        img1 = img1.to(device)
+        img2 = img2.to(device)
+        targets = targets.to(device)
+
+        optimizer.zero_grad()
+        outputs = model(img1, img2)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
+
+        train_epoch_loss.update(loss.item())
+        train_iter_loss.update(loss.item())
+
+        if batch_idx % log_step == 0:
+            current = batch_idx * train_loader.batch_size
+            logger.info('Train Epoch: {}\t [{:2d}/{:2d} ({:2.0f}%)]\t Loss: {:.6f}'.format(
+                epoch + 1,
+                current,
+                num_images,
+                current / num_images * 100,
+                train_iter_loss.avg))
+            train_iter_loss.reset()
+
+    # ------------ valid ------------- #
+    logger.info('\nValidating...')
+    valid_epoch_loss = AverageMeter()
+    # valid_iter_loss = AverageMeter()
+    with torch.no_grad():
+        with tqdm(total=195 * valid_loader.batch_size, file=sys.stdout) as pbar:  # todo 195
+            for batch_idx, (img1, img2, targets) in enumerate(valid_loader):
+                pbar.update(valid_loader.batch_size)
+                img1 = img1.to(device)
+                img2 = img2.to(device)
                 targets = targets.to(device)
 
-                outputs = model(data)
+                outputs = model(img1, img2)
                 loss = criterion(outputs, targets)
 
                 # valid_iter_loss.update(loss.item())
@@ -304,38 +315,3 @@ def do_nlcd_means_tuning(nlcd_means):
     nlcd_means[-1, :] = 0
     return nlcd_means
 
-
-def load_nlcd_stats(
-        stats_mu=config.LR_STATS_MU,
-        stats_sigma=config.LR_STATS_SIGMA,
-        class_weights=config.LR_CLASS_WEIGHTS,
-        lr_classes=config.LR_NCLASSES,
-        hr_classes=config.HR_NCLASSES,
-):
-    stats_mu = np.loadtxt(stats_mu)
-    assert lr_classes == stats_mu.shape[0]
-    assert hr_classes == (stats_mu.shape[1] + 1)
-    nlcd_means = np.concatenate([np.zeros((lr_classes, 1)), stats_mu], axis=1)
-    nlcd_means[nlcd_means == 0] = 0.000001
-    nlcd_means[:, 0] = 0
-    if stats_mu == "data/nlcd_mu.txt":
-        nlcd_means = do_nlcd_means_tuning(nlcd_means)
-
-    stats_sigma = np.loadtxt(stats_sigma)
-    assert lr_classes == stats_sigma.shape[0]
-    assert hr_classes == (stats_sigma.shape[1] + 1)
-    nlcd_vars = np.concatenate([np.zeros((lr_classes, 1)), stats_sigma], axis=1)
-    nlcd_vars[nlcd_vars < 0.0001] = 0.0001
-
-    if not class_weights:
-        nlcd_class_weights = np.ones((lr_classes,))
-    else:
-        nlcd_class_weights = np.loadtxt(class_weights)
-        assert lr_classes == nlcd_class_weights.shape[0]
-
-    return nlcd_class_weights, nlcd_means, nlcd_vars
-
-
-
-if __name__ == '__main__':
-    load_nlcd_stats()
