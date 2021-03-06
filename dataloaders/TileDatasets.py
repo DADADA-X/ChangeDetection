@@ -114,6 +114,49 @@ class TileChangeDetectionDataset(Dataset):
         return len(self.fns)
 
 
+class TileInferenceCDetDataset(Dataset):
+
+    def __init__(self, img_fn_t1, img_fn_t2, chip_size, stride, transform=None):
+        self.img_fn_t1 = img_fn_t1
+        self.img_fn_t2 = img_fn_t2
+        self.chip_size = chip_size
+
+        self.transform = transform
+
+        with rasterio.open(self.img_fn_t1) as f:
+            height, width = f.height, f.width
+            self.num_channels = f.count
+            self.dtype = f.profile["dtype"]
+            self.img_t1 = np.rollaxis(f.read(), 0, 3)
+
+        with rasterio.open(self.img_fn_t2) as f:
+            self.img_t2 = np.rollaxis(f.read(), 0, 3)
+
+        self.chip_coordinates = []  # upper left coordinate (y,x), of each chip that this Dataset will return
+        for y in list(range(0, height - self.chip_size, stride)) + [height - self.chip_size]:
+            for x in list(range(0, width - self.chip_size, stride)) + [width - self.chip_size]:
+                self.chip_coordinates.append((y, x))
+        self.num_chips = len(self.chip_coordinates)
+
+    def __getitem__(self, idx):
+        '''
+        Returns:
+            A tuple (chip, (y,x)): `chip` is the chip that we sampled from the larger tile. (y,x) are the indices of the upper left corner of the chip.
+        '''
+        y, x = self.chip_coordinates[idx]
+
+        img_t1 = self.img_t1[y:y + self.chip_size, x:x + self.chip_size]
+        img_t2 = self.img_t2[y:y + self.chip_size, x:x + self.chip_size]
+
+        if self.transform is not None:
+            img_t1, img_t2 = self.transform(img_t1, img_t2)
+
+        return img_t1, img_t2, np.array((y, x))
+
+    def __len__(self):
+        return self.num_chips
+
+
 if __name__ == '__main__':
     import pandas as pd
     from dataloaders.data_agu import *

@@ -30,7 +30,7 @@ from models import *
 from loss import *
 
 NUM_WORKERS = 4
-INIT_LR = 0.001
+INIT_LR = config.INIT_LR
 
 train_img_t1_dir = Path("/home/data/xyj/competition-data/ChangeDetection/Train/image-2013")
 train_img_t2_dir = Path("/home/data/xyj/competition-data/ChangeDetection/Train/image-2017")
@@ -151,7 +151,7 @@ def main():
     trainable_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = optim.AdamW(trainable_params, lr=INIT_LR, amsgrad=True, weight_decay=5e-4)
     criterion = nn.CrossEntropyLoss()  # todo
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", factor=0.5, patience=3, min_lr=0.0000001)
     logger.info("Trainable parameters: {}".format(utils.count_parameters(model)))
 
     # -------------------
@@ -196,8 +196,8 @@ def main():
         valid_loss_total_epochs.append(valid_loss_epoch)
         epoch_lr.append(lr)
 
-        if num_times_lr_dropped == 4:
-            break
+        # if num_times_lr_dropped == 4:
+        #     break
 
 
 if __name__ == "__main__":
