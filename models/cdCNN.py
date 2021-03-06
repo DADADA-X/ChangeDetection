@@ -85,14 +85,14 @@ class VGG16Base2(nn.Module):
         t2_4 = self.encoder4(self.mp(t2_3))
         t2_5 = self.encoder5(self.mp(t2_4))
 
-        out = self.decoder5(torch.cat([t1_5, t2_5], dim=1))
-        out = self.decoder4(torch.cat([out, t1_4, t2_4], dim=1))
-        out = self.decoder3(torch.cat([out, t1_3, t2_3], dim=1))
-        out = self.decoder2(torch.cat([out, t1_2, t2_2], dim=1))
+        out5 = self.decoder5(torch.cat([t1_5, t2_5], dim=1))
+        out4 = self.decoder4(torch.cat([out5, t1_4, t2_4], dim=1))
+        out3 = self.decoder3(torch.cat([out4, t1_3, t2_3], dim=1))
+        out2 = self.decoder2(torch.cat([out3, t1_2, t2_2], dim=1))
 
-        out = self.out(torch.cat([out, t1_1, t2_1], dim=1))
+        out1 = self.out(torch.cat([out2, t1_1, t2_1], dim=1))
 
-        return out
+        return out1
 
 
 class VGG16Base3(nn.Module):
@@ -106,16 +106,28 @@ class VGG16Base3(nn.Module):
 
         self.mp = nn.MaxPool2d(kernel_size=2)
 
-        self.decoder5 = self._make_deconv_layer(DecoderBlock, 512 * 2, 512, stride=2)
-        self.decoder4 = self._make_deconv_layer(DecoderBlock, 512 * 3, 256, stride=2)
-        self.decoder3 = self._make_deconv_layer(DecoderBlock, 256 * 3, 128, stride=2)
-        self.decoder2 = self._make_deconv_layer(DecoderBlock, 128 * 3, 64, stride=2)
+        self.decoder5 = deconv_block(512*2, 512)
+        self.decoder4 = nn.Sequential(conv_block(512*3, 512), deconv_block(512, 256))
+        self.decoder3 = nn.Sequential(conv_block(256*3, 256), deconv_block(256, 128))
+        self.decoder2 = nn.Sequential(conv_block(128*3, 128), deconv_block(128, 64))
+
+        self.side5 = self._make_side_branch(512)
+        self.side4 = self._make_side_branch(256)
+        self.side3 = self._make_side_branch(128)
+        self.side2 = self._make_side_branch(64)
 
         self.out = nn.Sequential(conv_block(64*3, 64), nn.Conv2d(64, 2, 1))
 
-    def _make_deconv_layer(self, block, inplanes, planes, stride=1):
-        layers = block(inplanes, planes, stride=stride)
-        return layers
+    def _up_sample(self, x, factor):
+        return F.interpolate(x, scale_factor=factor, mode='bilinear', align_corners=False)
+
+    def _make_side_branch(self, inplanes, factor=2):
+        kernel_size = factor * 2
+        sidebranch = nn.Sequential(
+            nn.Conv2d(inplanes, 1, 1),
+            nn.ConvTranspose2d(1, 1, kernel_size, stride=factor, padding=factor // 2)
+        )
+        return sidebranch
 
     def forward(self, t1, t2):
         t1_1 = self.encoder1(t1)
@@ -130,14 +142,20 @@ class VGG16Base3(nn.Module):
         t2_4 = self.encoder4(self.mp(t2_3))
         t2_5 = self.encoder5(self.mp(t2_4))
 
-        out = self.decoder5(torch.cat([t1_5, t2_5], dim=1))
-        out = self.decoder4(torch.cat([out, t1_4, t2_4], dim=1))
-        out = self.decoder3(torch.cat([out, t1_3, t2_3], dim=1))
-        out = self.decoder2(torch.cat([out, t1_2, t2_2], dim=1))
+        d5 = self.decoder5(torch.cat([t1_5, t2_5], dim=1))
+        d4 = self.decoder4(torch.cat([d5, t1_4, t2_4], dim=1))
+        d3 = self.decoder3(torch.cat([d4, t1_3, t2_3], dim=1))
+        d2 = self.decoder2(torch.cat([d3, t1_2, t2_2], dim=1))
 
-        out = self.out(torch.cat([out, t1_1, t2_1], dim=1))
+        out1 = self.out(torch.cat([d2, t1_1, t2_1], dim=1))
 
-        return out
+
+        out2 = self._up_sample(self.side2(d2), 2)
+        out3 = self._up_sample(self.side3(d3), 4)
+        out4 = self._up_sample(self.side4(d4), 8)
+        out5 = self._up_sample(self.side5(d5), 16)
+
+        return out5, out4, out3, out2, out1
 
 
 class ResBase(nn.Module):

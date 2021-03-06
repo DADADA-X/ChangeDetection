@@ -196,13 +196,15 @@ def main():
         counts = np.zeros((input_height, input_width), dtype=np.float32)
 
         for i, (data, coords) in enumerate(dataloader):
-            # TTA todo
-            data = _test_augment(data[0].numpy())
+            if config.TTA:
+                data = _test_augment(data[0].numpy())
             data = data.to(device)
             with torch.no_grad():
                 _, hr_out = model(data)
-                hr_out = F.softmax(hr_out, dim=1).cpu().numpy()
-            t_output = _test_augment_pred(hr_out)
+                t_output = F.softmax(hr_out, dim=1).cpu().numpy()
+            if config.TTA:
+                t_output = _test_augment_pred(t_output)
+
             for j in range(t_output.shape[0]):
                 y, x = coords[j]
 

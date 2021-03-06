@@ -32,11 +32,9 @@ CHIP_SIZE = config.TRAIN_CHIP_SIZE
 INIT_LR = 0.001
 
 parser = argparse.ArgumentParser(description='DFC2021 baseline training script')
-parser.add_argument('-t', '--train_fn', type=str, required=True,  help='The path to a train CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
-parser.add_argument('-v', '--valid_fn', type=str, required=True,  help='The path to a valid CSV file containing three columns -- "image_fn", "label_fn", and "group" -- that point to tiles of imagery and labels as well as which "group" each tile is in.')
-parser.add_argument('-o', '--output_dir', type=str, required=True,  help='The path to a directory to store model checkpoints.')
-# parser.add_argument('--overwrite', action="store_true",  help='Flag for overwriting `output_dir` if that directory already exists.')
-# parser.add_argument('--save_most_recent', action="store_true",  help='Flag for saving the most recent version of the model during training.')
+parser.add_argument('-t', '--train_fn', type=str, required=True)
+parser.add_argument('-v', '--valid_fn', type=str, required=True)
+parser.add_argument('-o', '--output_dir', type=str, required=True)
 parser.add_argument('-bb', '--backbone', default='efficientnet-b0',
     choices=(
         'efficientnet-b0',
@@ -181,7 +179,7 @@ def main():
     lr_criterion = nn.CrossEntropyLoss(ignore_index=0) # todo
     hr_criterion = hr_loss
     # criterion = balanced_ce_loss
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", factor=0.5, patience=3, min_lr=0.0000001)
     # factor=0.5, patience=3, min_lr=0.0000001
     logger.info("Trainable parameters: {}".format(utils.count_parameters(model)))
 
@@ -231,8 +229,8 @@ def main():
         valid_loss_total_epochs.append(valid_loss_epoch)
         epoch_lr.append(lr)
 
-        if num_times_lr_dropped == 4:
-            break
+        # if num_times_lr_dropped == 4:
+        #     break
 
 
     #-------------------
