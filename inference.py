@@ -83,9 +83,29 @@ def _test_augment_pred(pred):
     return pred_out
 
 
-def main():
-    # print("Starting DFC2021 model inference script at %s" % (str(datetime.datetime.now())))
+def _generate_matrix(gt, pred, num_class):
+    mask = (gt >= 0) & (gt < num_class)
+    label = num_class * gt[mask].astype('int') + pred[mask]
+    count = np.bincount(label, minlength=num_class ** 2)
+    confusion_matrix = count.reshape(num_class, num_class)
+    return confusion_matrix
 
+
+def _Class_IOU(confusion_matrix):
+    intersection = np.diag(confusion_matrix)
+    union = np.sum(confusion_matrix, axis=1) + np.sum(confusion_matrix, axis=0) - np.diag(confusion_matrix)
+    MIoU = intersection / (union + 1e-8)
+    MIoU[np.where(union==0)] = 1
+    return MIoU
+
+
+def mIoU(pred, gt):
+    confusion_matrix = _generate_matrix(gt, pred, num_class=config.HR_NCLASSES-1)
+    miou = _Class_IOU(confusion_matrix)
+    return miou.mean()
+
+
+def main():
     # -------------------
     # Setup
     # -------------------
@@ -95,20 +115,6 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    # if os.path.isfile(args.output_dir):
-    #     print("A file was passed as `--output_dir`, please pass a directory!")
-    #     return
-    #
-    # if os.path.exists(args.output_dir) and len(os.listdir(args.output_dir)) > 0:
-    #     if args.overwrite:
-    #         print("WARNING! The output directory, %s, already exists, we might overwrite data in it!" % (args.output_dir))
-    #     else:
-    #         print("The output directory, %s, already exists and isn't empty. We don't want to overwrite and existing results, exiting..." % (args.output_dir))
-    #         return
-    # else:
-    #     print("The output directory doesn't exist or is empty.")
-    #     os.makedirs(args.output_dir, exist_ok=True)
-
     if args.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
@@ -116,21 +122,6 @@ def main():
     device = torch.device('cuda:0' if n_gpu > 0 else 'cpu')
     device_ids = list(range(n_gpu))
 
-    # if torch.cuda.is_available():
-    #     device = torch.device("cuda:%d" % args.gpu)
-    # else:
-    #     print("WARNING! Torch is reporting that CUDA isn't available, exiting...")
-    #     return
-
-    # -------------------
-    # Load model
-    # -------------------
-    # if args.model == "unet":
-    #     model = models.get_unet()
-    # elif args.model == "fcn":
-    #     model = models.get_fcn()
-    # else:
-    #     raise ValueError("Invalid model")
     model = models.isCNN(args.backbone)
 
     state_dict = torch.load(args.model_fn)
@@ -151,11 +142,15 @@ def main():
     # -------------------
     input_dataframe = pd.read_csv(args.input_fn)
     image_fns = input_dataframe["image_fn"].values
+    label_fns = input_dataframe["label_fn"].values
     groups = input_dataframe["group"].values
+
+    inf_miou = 0
 
     for image_idx in range(len(image_fns)):
         tic = time.time()
         image_fn = image_fns[image_idx]
+        label_fn = label_fns[image_idx]
         group = groups[image_idx]
 
         print("(%d/%d) Processing %s" % (image_idx + 1, len(image_fns), Path(image_fn).stem), end=" ... ")
@@ -177,6 +172,10 @@ def main():
         with rasterio.open(image_fn) as f:
             input_width, input_height = f.width, f.height
             input_profile = f.profile.copy()
+
+        with rasterio.open(label_fn) as f:
+            label = utils.NLCD_CLASS_TO_IDX_MAP[f.read().squeeze()]
+            label = config.NLCD_IDX_TO_REDUCED_LC_MAP[label]
 
         dataset = TileInferenceDataset(image_fn, chip_size=CHIP_SIZE, stride=CHIP_STRIDE, transform=image_transforms,
                                        verbose=False)
@@ -213,6 +212,10 @@ def main():
         output = output / counts
         output_hard = output.argmax(axis=0).astype(np.uint8)
 
+        # offline test
+        miou = mIoU(output_hard, label)
+        inf_miou += miou
+
         # -------------------
         # Save output
         # -------------------
@@ -230,24 +233,9 @@ def main():
             f.write(output_hard, 1)
             f.write_colormap(1, utils.NLCD_IDX_COLORMAP)
 
-        # if args.save_soft:
-        #     output = output / output.sum(axis=0, keepdims=True)
-        #     output = (output * 255).astype(np.uint8)
-        #
-        #     output_profile = input_profile.copy()
-        #     output_profile["driver"] = "GTiff"
-        #     output_profile["dtype"] = "uint8"
-        #     output_profile["count"] = len(config.NLCD_CLASSES)
-        #     del output_profile["nodata"]
-        #
-        #     output_fn = image_fn.split("/")[-1]  # something like "546_naip-2013.tif"
-        #     output_fn = output_fn.replace("naip", "predictions-soft")
-        #     output_fn = os.path.join(args.output_dir, output_fn)
-        #
-        #     with rasterio.open(output_fn, "w", **output_profile) as f:
-        #         f.write(output)
-
         print("finished in %0.4f seconds" % (time.time() - tic))
+
+    print("Mean IoU: {}".format(inf_miou / len(image_fns)))
 
 
 if __name__ == "__main__":
